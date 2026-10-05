@@ -52,3 +52,11 @@
 - [x] Replaced runtime-route-derived OpenAPI with an explicit OpenAPI 3.0.3 contract in `app/openapi.py`, covering public documentation routes and all API resources, real path/query parameters, JSON request schemas, response/error declarations, and `X-API-Key` security for business operations.
 - [x] Added `app/test_documentation.py` Flask test-client coverage for public docs, key/role rejection, members, trainers, workouts, and post-commit event publication using `InMemoryRepository`/`CapturingPublisher` injection seams.
 - [ ] Focused pytest/ruff not run: this unit environment exposed filesystem tools only and no command-execution tool.
+
+## Verifier remediation design (resumed)
+- Member contract uses required `name`, `email`, `phone`, and client-supplied `joining_date`; optional `date_of_birth`, `address`, and `emergency_contact`. `name` is canonical; legacy split-name API fields are removed. Migration is aligned by making split columns nullable for compatibility while API/repository use canonical fields.
+- Membership plans accept `price >= 0` and nullable `visit_limit` (`null` means unlimited). Renewal closes the existing ACTIVE lifecycle record and creates a new immutable snapshot record from the current plan, preserving the original row's price, dates, plan ID, and visit balance.
+- Trainers accept ACTIVE, INACTIVE, and ON_LEAVE. `max_members` is nullable (unlimited); capacity comparison happens only for a non-null value.
+- Named reports are: `daily-attendance`, `monthly-attendance`, `active-members`, `expiring-memberships`, `expired-memberships`, `payment-statistics`, `trainer-statistics`, `member-statistics`, and `class-enrollment`; report aggregates derive presence from `check_in_at` rather than a nonexistent attendance status.
+- Independent repair groups: members; memberships; trainers; reports; test/verification + deployment. Shared contract is the canonical schema above, response envelope/auth unchanged, and OpenAPI must track each altered DTO/report enum.
+- [ ] Verifier gap remediation in progress
