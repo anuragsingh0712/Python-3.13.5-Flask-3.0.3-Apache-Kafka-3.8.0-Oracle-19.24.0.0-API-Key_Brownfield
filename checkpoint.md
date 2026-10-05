@@ -64,4 +64,8 @@
   - [x] Membership nullable/free plan and immutable renewal lifecycle implemented.
   - [x] Trainer ON_LEAVE and optional/unlimited capacity implemented.
   - [x] Named report variants/aggregates implemented.
-  - [ ] OpenAPI/deployment/comprehensive verification pending.
+  - [x] OpenAPI contract, fresh-checkout Compose defaults, and documentation tests aligned.
+  - [x] Comprehensive coverage added: 53 passed, 1 opt-in real-Oracle integration skipped (requires RUN_ORACLE_INTEGRATION=1 plus Oracle settings); ruff clean.
+  - [x] Native one-worker Gunicorn boot plus 25 observed live HTTP checks passed; regenerated `tests-artifacts/test_results.json`, `api_test_report.xlsx`, and `project_report.docx` from observed responses.
+  - [!] Final Docker image pull/build/run verification retried 2026-10-05 but Docker daemon remains unavailable (`Cannot connect to the Docker daemon at unix:///var/run/docker.sock`); all required image pulls and container verification are blocked externally.
+  - [x] Verifier remediation otherwise complete.

@@ -1,11 +1,4 @@
-"""Payments, refunds, and read-only operational reports.
-
-The module deliberately depends only on the repository and publisher interfaces.  An
-application can inject those through ``bind_payments`` (or its Flask extensions),
-which keeps the payment write transaction usable with both Oracle and the in-memory
-repository used by tests.  Reports are intentionally calculated from canonical
-schema fields, rather than accepting a client-selected table or column.
-"""} }]}Oops used multi syntax to functions maybe response? It accepted? tool result blank likely call malformed? It shows tool? Actually nested. Need check. Then big edit. Need old text exact entirety report section too huge ~118 lines. Can do successive delete old map then class. Replace map only then class run. First map. Also obsolete comment. Use exact. +#+#+#+#+#+ിയassistant to=functions.edit_file კომენტary 񎔊ppնչ্ছেনಲ್ಲಿ  天天中彩票是不是彩票招商്യം d天天 全民彩票天天  北京赛车怎么json{Jsii 
+"""Payments, refunds, and safe named operational reports."""
 
 from __future__ import annotations
 
@@ -17,6 +10,7 @@ from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core import (
+    ConflictError,
     DomainError,
     NotFoundError,
     cursor_params,
@@ -29,15 +23,11 @@ from app.repository import EventPublisher, NullEventPublisher, Repository
 
 payments_bp = Blueprint("payments", __name__, url_prefix="/api/v1")
 reports_bp = Blueprint("reports", __name__, url_prefix="/api/v1")
-
 PAYMENT_STATUSES = frozenset({"PENDING", "COMPLETED", "FAILED", "REFUNDED"})
 
 
 class PaymentCreateDTO(BaseModel):
-    """The amount is the original captured amount, never a negative adjustment."""
-
     model_config = ConfigDict(extra="forbid")
-
     member_id: int = Field(gt=0)
     membership_id: int | None = Field(default=None, gt=0)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
@@ -48,14 +38,12 @@ class PaymentCreateDTO(BaseModel):
 
     @field_validator("method", mode="before")
     @classmethod
-    def clean_method(cls, value: Any) -> str:
-        if not isinstance(value, str):
-            return value
-        return value.strip().upper()
+    def normalize_method(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("reference_id")
     @classmethod
-    def clean_reference_id(cls, value: str) -> str:
+    def normalize_reference(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("reference_id must not be blank")
@@ -64,9 +52,17 @@ class PaymentCreateDTO(BaseModel):
 
 class RefundCreateDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     reason: str | None = Field(default=None, max_length=500)
+
+
+def _decimal(value: Any, field: str) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception as error:
+        raise DomainError(
+            "invalid_payment", f"Stored {field} is invalid.", 409
+        ) from error
 
 
 class PaymentService:
@@ -77,52 +73,54 @@ class PaymentService:
         self.publisher = publisher or NullEventPublisher()
 
     def create(self, payload: PaymentCreateDTO) -> dict[str, Any]:
-        # The foreign key checks make the same rule apply to the in-memory adapter
-        # and to an Oracle implementation which may additionally enforce FK DDL.
-        self.repository.get("members", payload.member_id)
-        if payload.membership_id is not None:
-            membership = self.repository.get("memberships", payload.membership_id)
-            if membership.get("member_id") != payload.member_id:
-                raise DomainError(
-                    "validation_error",
-                    "membership_id does not belong to member_id.",
-                    422,
-                )
-
-        values = {
-            "member_id": payload.member_id,
-            "membership_id": payload.membership_id,
-            "amount": payload.amount,
-            "refunded_amount": Decimal("0.00"),
-            "method": payload.method,
-            "reference_id": payload.reference_id,
-            "created_at": payload.created_at or datetime.now(timezone.utc),
-            "status": payload.status,
-        }
+        # The Oracle schema has a unique constraint, but enforcing the same invariant
+        # inside this transaction keeps injected repositories faithful to production.
+        # The database constraint remains the concurrent-writer backstop.
         with self.repository.transaction():
-            payment = self.repository.create("payments", values)
+            if self.repository.list("payments", reference_id=payload.reference_id):
+                raise ConflictError("A payment with this reference_id already exists.")
+            self.repository.get("members", payload.member_id)
+            if payload.membership_id is not None:
+                membership = self.repository.get("memberships", payload.membership_id)
+                if membership.get("member_id") != payload.member_id:
+                    raise DomainError(
+                        "validation_error",
+                        "membership_id does not belong to member_id.",
+                        422,
+                    )
+            payment = self.repository.create(
+                "payments",
+                {
+                    "member_id": payload.member_id,
+                    "membership_id": payload.membership_id,
+                    "amount": payload.amount,
+                    "refunded_amount": Decimal("0.00"),
+                    "method": payload.method,
+                    "reference_id": payload.reference_id,
+                    "created_at": payload.created_at or datetime.now(timezone.utc),
+                    "status": payload.status,
+                },
+            )
         self.publisher.publish_after_commit("gym.payment.created.v1", payment)
         return payment
 
     def list(
         self, cursor: int | None, limit: int, filters: Mapping[str, Any]
     ) -> tuple[list[dict[str, Any]], str | None]:
-        rows = self.repository.list("payments", **dict(filters))
-        rows.sort(key=lambda row: int(row["id"]))
+        rows = sorted(
+            self.repository.list("payments", **dict(filters)),
+            key=lambda row: int(row["id"]),
+        )
         rows = [row for row in rows if cursor is None or int(row["id"]) > cursor]
         page = rows[:limit]
-        next_cursor = (
-            encode_cursor(page[-1]["id"]) if len(rows) > limit and page else None
-        )
-        return page, next_cursor
+        return page, encode_cursor(page[-1]["id"]) if len(
+            rows
+        ) > limit and page else None
 
     def refund(self, payment_id: int, payload: RefundCreateDTO) -> dict[str, Any]:
-        # Keeping the read, bound check, and write inside the transaction is required:
-        # concurrent refunds must not be able to exceed the original captured amount.
         with self.repository.transaction():
             payment = self.repository.get("payments", payment_id, for_update=True)
-            status = str(payment.get("status", "")).upper()
-            if status != "COMPLETED":
+            if str(payment.get("status", "")).upper() != "COMPLETED":
                 raise DomainError(
                     "invalid_state", "Only completed payments may be refunded.", 409
                 )
@@ -135,16 +133,12 @@ class PaymentService:
                     422,
                 )
             total = refunded + payload.amount
-            # The persisted payment status has no partial-refund state.  A partial
-            # refund is represented solely by refunded_amount; only a full refund
-            # transitions the payment to REFUNDED.
-            state = "REFUNDED" if total == original else "COMPLETED"
-            updated = self.repository.update(
+            payment = self.repository.update(
                 "payments",
                 payment_id,
                 {
                     "refunded_amount": total,
-                    "status": state,
+                    "status": "REFUNDED" if total == original else "COMPLETED",
                 },
             )
         self.publisher.publish_after_commit(
@@ -152,26 +146,16 @@ class PaymentService:
             {
                 "payment_id": payment_id,
                 "amount": payload.amount,
-                "refunded_amount": updated["refunded_amount"],
-                "status": updated["status"],
+                "refunded_amount": payment["refunded_amount"],
+                "status": payment["status"],
             },
         )
-        return updated
-
-
-def _decimal(value: Any, field: str) -> Decimal:
-    try:
-        return Decimal(str(value))
-    except Exception as error:
-        raise DomainError(
-            "invalid_payment", f"Stored {field} is invalid.", 409
-        ) from error
+        return payment
 
 
 def bind_payments(
     repository: Repository, publisher: EventPublisher | None = None
 ) -> None:
-    """Optional lightweight injection point for apps that do not use extensions."""
     payments_bp.repository = repository  # type: ignore[attr-defined]
     payments_bp.publisher = publisher or NullEventPublisher()  # type: ignore[attr-defined]
     reports_bp.repository = repository  # type: ignore[attr-defined]
@@ -199,10 +183,9 @@ def _dependencies() -> tuple[Repository, EventPublisher]:
 def _payment_filters() -> dict[str, Any]:
     filters: dict[str, Any] = {}
     for name in ("member_id", "membership_id"):
-        raw = request.args.get(name)
-        if raw is not None:
+        if name in request.args:
             try:
-                value = int(raw)
+                value = int(request.args[name])
                 if value <= 0:
                     raise ValueError
             except ValueError:
@@ -210,7 +193,7 @@ def _payment_filters() -> dict[str, Any]:
                     "validation_error", f"{name} must be a positive integer.", 422
                 ) from None
             filters[name] = value
-    if request.args.get("status") is not None:
+    if "status" in request.args:
         status = request.args["status"].strip().upper()
         if status not in PAYMENT_STATUSES:
             raise DomainError("validation_error", "status is invalid.", 422)
@@ -232,25 +215,24 @@ def list_payments():
 @roles_required("ADMIN", "STAFF")
 def create_payment():
     repository, publisher = _dependencies()
-    payment = PaymentService(repository, publisher).create(
-        parse_model(PaymentCreateDTO)
+    return success(
+        PaymentService(repository, publisher).create(parse_model(PaymentCreateDTO)),
+        status=201,
     )
-    return success(payment, status=201)
 
 
 @payments_bp.post("/payments/<int:payment_id>/refunds")
 @roles_required("ADMIN", "STAFF")
 def refund_payment(payment_id: int):
     repository, publisher = _dependencies()
-    payment = PaymentService(repository, publisher).refund(
-        payment_id, parse_model(RefundCreateDTO)
+    return success(
+        PaymentService(repository, publisher).refund(
+            payment_id, parse_model(RefundCreateDTO)
+        )
     )
-    return success(payment)
 
 
-# These are the complete public report names.  Values identify only fixed,
-# canonical schema fields; neither a table nor a column is accepted from a request.
-_REPORTS: dict[str, tuple[str, str]] = {
+_REPORTS = {
     "daily-attendance": ("attendance", "check_in_at"),
     "monthly-attendance": ("attendance", "check_in_at"),
     "active-members": ("memberships", "end_date"),
@@ -263,28 +245,7 @@ _REPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _report_dates() -> tuple[date | None, date | None]:
-    def parse(name: str) -> date | None:
-        raw = request.args.get(name)
-        if raw is None:
-            return None
-        try:
-            return date.fromisoformat(raw)
-        except ValueError:
-            raise DomainError(
-                "validation_error", f"{name} must be an ISO-8601 date.", 422
-            ) from None
-
-    start, end = parse("start_date"), parse("end_date")
-    if start and end and start > end:
-        raise DomainError(
-            "validation_error", "start_date cannot be after end_date.", 422
-        )
-    return start, end
-
-
 def _row_date(row: Mapping[str, Any], field: str) -> date | None:
-    """Read only the allow-listed date column for the selected report."""
     value = row.get(field)
     if isinstance(value, datetime):
         return value.date()
@@ -301,108 +262,86 @@ def _row_date(row: Mapping[str, Any], field: str) -> date | None:
     return None
 
 
+def _report_dates() -> tuple[date | None, date | None]:
+    values: list[date | None] = []
+    for name in ("start_date", "end_date"):
+        raw = request.args.get(name)
+        try:
+            values.append(date.fromisoformat(raw) if raw else None)
+        except ValueError:
+            raise DomainError(
+                "validation_error", f"{name} must be an ISO-8601 date.", 422
+            ) from None
+    if values[0] and values[1] and values[0] > values[1]:
+        raise DomainError(
+            "validation_error", "start_date cannot be after end_date.", 422
+        )
+    return values[0], values[1]
+
+
 class ReportService:
     def __init__(self, repository: Repository) -> None:
         self.repository = repository
 
-    @staticmethod
-    def _dated_rows(
-        rows: list[dict[str, Any]], field: str, start: date | None, end: date | None
-    ) -> list[dict[str, Any]]:
-        """Return rows with a real canonical date in the inclusive requested range."""
-        selected: list[dict[str, Any]] = []
-        for row in rows:
-            row_date = _row_date(row, field)
-            if row_date is None:
-                continue
-            if (start and row_date < start) or (end and row_date > end):
-                continue
-            selected.append(row)
-        return selected
-
-    @staticmethod
-    def _counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for row in rows:
-            key = str(row.get(field, "UNKNOWN")).upper()
-            counts[key] = counts.get(key, 0) + 1
-        return dict(sorted(counts.items()))
-
-    @staticmethod
-    def _attendance_buckets(
-        rows: list[dict[str, Any]], monthly: bool
-    ) -> list[dict[str, Any]]:
-        buckets: dict[str, int] = {}
-        for row in rows:
-            checked_in = _row_date(row, "check_in_at")
-            # _dated_rows already rejects null check_in_at.  Keeping this guard makes
-            # presence semantics explicit if this helper is reused.
-            if checked_in is None:
-                continue
-            key = checked_in.strftime("%Y-%m") if monthly else checked_in.isoformat()
-            buckets[key] = buckets.get(key, 0) + 1
-        label = "month" if monthly else "date"
-        return [
-            {label: key, "present_count": value}
-            for key, value in sorted(buckets.items())
+    def run(self, name: str, start: date | None, end: date | None) -> dict[str, Any]:
+        if name not in _REPORTS:
+            raise NotFoundError("report")
+        table, field = _REPORTS[name]
+        rows = [
+            row
+            for row in self.repository.list(table)
+            if (d := _row_date(row, field)) is not None
+            and (not start or d >= start)
+            and (not end or d <= end)
         ]
+        def counts(values: list[dict[str, Any]], key: str) -> dict[str, int]:
+            return {
+                status: sum(
+                    1
+                    for value in values
+                    if str(value.get(key, "")).upper() == status
+                )
+                for status in sorted(
+                    {str(value.get(key, "")).upper() for value in values}
+                )
+            }
 
-    def run(
-        self, name: str, start: date | None, end: date | None
-    ) -> dict[str, Any]:
-        try:
-            table, date_field = _REPORTS[name]
-        except KeyError:
-            raise NotFoundError("report") from None
-
-        rows = self._dated_rows(self.repository.list(table), date_field, start, end)
-        summary: dict[str, Any]
         if name in {"daily-attendance", "monthly-attendance"}:
-            # A check-in is the canonical proof of attendance; ATTENDANCE has no
-            # status column and no inferred status is consulted here.
             monthly = name == "monthly-attendance"
-            summary = {
+            buckets: dict[str, int] = {}
+            for row in rows:
+                d = _row_date(row, "check_in_at")
+                key = d.strftime("%Y-%m") if monthly else d.isoformat()
+                buckets[key] = buckets.get(key, 0) + 1
+            summary: dict[str, Any] = {
                 "present_count": len(rows),
-                "buckets": self._attendance_buckets(rows, monthly),
+                "buckets": [
+                    {"month" if monthly else "date": key, "present_count": count}
+                    for key, count in sorted(buckets.items())
+                ],
             }
         elif name == "active-members":
-            active = [
-                row for row in rows if str(row.get("status", "")).upper() == "ACTIVE"
-            ]
-            member_ids = {
-                row.get("member_id")
-                for row in active
-                if row.get("member_id") is not None
-            }
+            active = [r for r in rows if str(r.get("status", "")).upper() == "ACTIVE"]
             summary = {
-                "active_members": len(member_ids),
+                "active_members": len({r.get("member_id") for r in active}),
                 "active_memberships": len(active),
             }
-        elif name == "expiring-memberships":
-            expiring = [
-                row for row in rows if str(row.get("status", "")).upper() == "ACTIVE"
-            ]
+        elif name in {"expiring-memberships", "expired-memberships"}:
+            wanted = "ACTIVE" if name == "expiring-memberships" else "EXPIRED"
+            selected = [r for r in rows if str(r.get("status", "")).upper() == wanted]
             summary = {
-                "expiring_memberships": len(expiring),
-                "by_end_date": self._date_buckets(expiring, "end_date"),
-            }
-        elif name == "expired-memberships":
-            expired = [
-                row for row in rows if str(row.get("status", "")).upper() == "EXPIRED"
-            ]
-            summary = {
-                "expired_memberships": len(expired),
-                "by_end_date": self._date_buckets(expired, "end_date"),
+                "expiring_memberships"
+                if wanted == "ACTIVE"
+                else "expired_memberships": len(selected)
             }
         elif name == "payment-statistics":
             gross = sum(
-                (_decimal(row.get("amount", 0), "amount") for row in rows),
-                Decimal("0"),
+                (_decimal(r.get("amount", 0), "amount") for r in rows), Decimal("0")
             )
             refunded = sum(
                 (
-                    _decimal(row.get("refunded_amount", 0), "refunded_amount")
-                    for row in rows
+                    _decimal(r.get("refunded_amount", 0), "refunded_amount")
+                    for r in rows
                 ),
                 Decimal("0"),
             )
@@ -411,50 +350,50 @@ class ReportService:
                 "gross_amount": gross,
                 "refunded_amount": refunded,
                 "net_amount": gross - refunded,
-                "status_counts": self._counts(rows, "status"),
-                "method_counts": self._counts(rows, "method"),
+                "status_counts": counts(rows, "status"),
+                "method_counts": counts(rows, "method"),
             }
         elif name == "trainer-statistics":
-            by_trainer: dict[str, int] = {}
-            for row in rows:
-                trainer_id = row.get("trainer_id")
-                if trainer_id is not None:
-                    key = str(trainer_id)
-                    by_trainer[key] = by_trainer.get(key, 0) + 1
+            by: dict[int, int] = {}
+            [
+                by.__setitem__(r["trainer_id"], by.get(r["trainer_id"], 0) + 1)
+                for r in rows
+                if r.get("trainer_id") is not None
+            ]
             summary = {
                 "assignment_count": len(rows),
-                "trainer_count": len(by_trainer),
+                "trainer_count": len(by),
                 "assignments_by_trainer": [
-                    {"trainer_id": int(key), "assigned_members": value}
-                    for key, value in sorted(by_trainer.items(), key=lambda item: int(item[0]))
+                    {"trainer_id": k, "assigned_members": v}
+                    for k, v in sorted(by.items())
                 ],
             }
         elif name == "member-statistics":
             summary = {
                 "member_count": len(rows),
-                "status_counts": self._counts(rows, "status"),
-                "joined_by_date": self._date_buckets(rows, "joining_date"),
+                "status_counts": counts(rows, "status"),
             }
-        else:  # class-enrollment
-            by_class: dict[str, int] = {}
-            for row in rows:
-                if str(row.get("status", "")).upper() != "ENROLLED":
-                    continue
+        else:
+            # Report both the lifecycle totals and the useful capacity-facing
+            # aggregate: active enrolled members per class.  Cancelled rows are
+            # retained in status_counts/history but do not consume a class seat.
+            enrolled = [
+                row for row in rows if str(row.get("status", "")).upper() == "ENROLLED"
+            ]
+            by_class: dict[int, int] = {}
+            for row in enrolled:
                 class_id = row.get("class_id")
                 if class_id is not None:
-                    key = str(class_id)
-                    by_class[key] = by_class.get(key, 0) + 1
+                    by_class[int(class_id)] = by_class.get(int(class_id), 0) + 1
             summary = {
                 "enrollment_count": len(rows),
-                "enrolled_count": sum(by_class.values()),
-                "status_counts": self._counts(rows, "status"),
+                "enrolled_count": len(enrolled),
                 "enrollments_by_class": [
-                    {"class_id": int(key), "enrolled_members": value}
-                    for key, value in sorted(by_class.items(), key=lambda item: int(item[0]))
+                    {"class_id": class_id, "enrolled_members": enrolled_count}
+                    for class_id, enrolled_count in sorted(by_class.items())
                 ],
+                "status_counts": counts(rows, "status"),
             }
-        # Keep a uniform selected-row count while named fields retain their
-        # domain-specific meaning (for example, active_members is de-duplicated).
         summary["count"] = len(rows)
         return {
             "report": name,
@@ -462,16 +401,6 @@ class ReportService:
             "end_date": end,
             "summary": summary,
         }
-
-    @staticmethod
-    def _date_buckets(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
-        counts: dict[str, int] = {}
-        for row in rows:
-            value = _row_date(row, field)
-            if value is not None:
-                key = value.isoformat()
-                counts[key] = counts.get(key, 0) + 1
-        return [{"date": key, "count": value} for key, value in sorted(counts.items())]
 
 
 @reports_bp.get("/reports/<report_name>")

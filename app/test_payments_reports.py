@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.core import NotFoundError
+from app.core import ConflictError, NotFoundError
 from app.payments import (
     PaymentCreateDTO,
     PaymentService,
@@ -58,6 +58,17 @@ def _report_repository() -> InMemoryRepository:
         {"class_id": 9, "member_id": 1, "status": "ENROLLED", "enrolled_at": date(2025, 2, 3)},
     )
     return repository
+
+
+def test_payment_reference_is_unique_for_in_memory_transactions():
+    service, _ = _payment_service()
+    payment = PaymentCreateDTO(
+        member_id=1, amount=Decimal("10.00"), method="CARD", reference_id="charge-unique"
+    )
+    service.create(payment)
+
+    with pytest.raises(ConflictError):
+        service.create(payment)
 
 
 def test_partial_refund_remains_completed_and_full_refund_is_refunded():

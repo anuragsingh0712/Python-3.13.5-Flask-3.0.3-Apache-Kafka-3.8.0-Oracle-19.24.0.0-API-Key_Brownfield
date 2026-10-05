@@ -4,11 +4,21 @@ Production-oriented Flask REST JSON API under `/api/v1` for members, memberships
 
 ## Run
 
+For a native process, copy the documented example and replace its illustrative values:
+
 ```sh
 cp .env.example .env
-# replace placeholders, then
+# replace the illustrative API keys/password before a real deployment
 sh start.sh
 ```
+
+Docker Compose is self-contained and does **not** require an untracked `.env` file:
+
+```sh
+docker compose up --build
+```
+
+Compose uses the same deliberately non-secret illustrative values shown in `.env.example` (`replace-*-key` and `replace-me`) so a fresh checkout starts consistently. They are only suitable for local evaluation: change the `api` and `oracle` environment values (or provide an approved Compose override) before exposing the deployment.
 
 The service binds `0.0.0.0:8000`. `GET /health`, `/docs`, and `/openapi.json` are public. `/docs` loads Swagger UI; all versioned business endpoints, including `/api/v1/openapi.json`, require `X-API-Key`.
 
@@ -24,7 +34,7 @@ Never commit deployed values. Missing/invalid keys return 401; valid keys withou
 
 ## Collections
 
-Collection endpoints accept `limit` (1–100) and an opaque `cursor`. Ordering is stable by monotonic ID. Resource-specific documented filters include member status/search, membership history, attendance date/member, trainer status, class status, and payment history. `next_cursor` is null/absent at the final page.
+Collection endpoints accept `limit` (1–100) and an opaque `cursor`. Ordering is stable by monotonic ID. Resource-specific documented filters include member status/search, membership history, attendance `member_id`, `membership_id`, `from_date`, and `to_date`, trainer status, class status, and payment history. `next_cursor` is null/absent at the final page.
 
 ## Infrastructure
 

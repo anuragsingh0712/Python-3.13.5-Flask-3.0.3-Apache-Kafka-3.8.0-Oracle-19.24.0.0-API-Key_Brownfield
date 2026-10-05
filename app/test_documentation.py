@@ -1,5 +1,7 @@
 """Contract tests for the hand-written documentation and injected resource seams."""
 
+from pathlib import Path
+
 from app import create_app
 from app.core import Settings
 from app.repository import CapturingPublisher, InMemoryRepository
@@ -43,16 +45,69 @@ def test_public_documentation_is_open_and_business_operations_are_secured():
     assert client.get("/api/v1/members").status_code == 401
 
 
+def test_openapi_tracks_the_repaired_public_contract():
+    spec = create_app(settings=SETTINGS).test_client().get("/openapi.json").get_json()
+    schemas = spec["components"]["schemas"]
+
+    member = schemas["MemberCreate"]
+    assert member["required"] == ["name", "email", "phone", "joining_date"]
+    assert "first_name" not in member["properties"]
+    assert "last_name" not in member["properties"]
+    assert {"address", "emergency_contact", "date_of_birth"} <= set(
+        member["properties"]
+    )
+
+    plan = schemas["MembershipPlanCreate"]
+    assert plan["properties"]["price"]["minimum"] == 0
+    assert "visit_limit" not in plan["required"]
+    assert plan["properties"]["visit_limit"]["nullable"] is True
+
+    trainer = schemas["TrainerCreate"]
+    assert "ON_LEAVE" in trainer["properties"]["status"]["enum"]
+    assert "max_members" not in trainer["required"]
+    assert trainer["properties"]["max_members"]["nullable"] is True
+
+    attendance_parameters = spec["paths"]["/api/v1/attendance"]["get"]["parameters"]
+    assert {parameter["name"] for parameter in attendance_parameters} >= {
+        "from_date",
+        "to_date",
+        "membership_id",
+    }
+    report_parameter = spec["paths"]["/api/v1/reports/{report_name}"]["get"][
+        "parameters"
+    ][0]
+    assert report_parameter["schema"]["enum"] == [
+        "daily-attendance",
+        "monthly-attendance",
+        "active-members",
+        "expiring-memberships",
+        "expired-memberships",
+        "payment-statistics",
+        "trainer-statistics",
+        "member-statistics",
+        "class-enrollment",
+    ]
+
+
+def test_compose_has_fresh_checkout_defaults_and_pinned_infrastructure_images():
+    compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+    compose = compose_path.read_text()
+    assert "env_file:" not in compose
+    assert "gvenzl/oracle-free:23-slim" in compose
+    assert "apache/kafka:3.8.0" in compose
+    assert 'API_KEY: \'{"replace-admin-key"' in compose
+
+
 def test_members_auth_roles_and_created_event_through_factory_seam():
     repository, publisher = InMemoryRepository(), CapturingPublisher()
     client = create_app(
         repository=repository, publisher=publisher, settings=SETTINGS
     ).test_client()
     payload = {
-        "first_name": "Ada",
-        "last_name": "Lovelace",
+        "name": "Ada Lovelace",
         "email": "ADA@example.test",
         "phone": "+15551234",
+        "joining_date": "2025-01-01",
     }
     assert client.post("/api/v1/members", json=payload).status_code == 401
     assert (

@@ -217,7 +217,14 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
         "/api/v1/attendance": {
             "get": _operation(
                 "list_attendance",
-                parameters=[CURSOR, LIMIT, _parameter("member_id", ID)],
+                parameters=[
+                    CURSOR,
+                    LIMIT,
+                    _parameter("member_id", ID),
+                    _parameter("membership_id", ID),
+                    _parameter("from_date", {"type": "string", "format": "date"}),
+                    _parameter("to_date", {"type": "string", "format": "date"}),
+                ],
             )
         },
         "/api/v1/membership-plans": {
@@ -337,15 +344,15 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
                         {
                             "type": "string",
                             "enum": [
-                                "attendance",
-                                "member",
-                                "membership",
-                                "revenue",
-                                "payment",
-                                "trainer-member",
-                                "trainer-assignment",
+                                "daily-attendance",
+                                "monthly-attendance",
+                                "active-members",
+                                "expiring-memberships",
+                                "expired-memberships",
+                                "payment-statistics",
+                                "trainer-statistics",
+                                "member-statistics",
                                 "class-enrollment",
-                                "classes",
                             ],
                         },
                         location="path",
@@ -360,37 +367,41 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
     schemas = {
         "MemberCreate": {
             "type": "object",
-            "required": ["first_name", "last_name", "email", "phone"],
+            "required": ["name", "email", "phone", "joining_date"],
             "properties": {
-                "first_name": {"type": "string"},
-                "last_name": {"type": "string"},
+                "name": {"type": "string"},
                 "email": {"type": "string", "format": "email"},
                 "phone": {"type": "string"},
+                "joining_date": {"type": "string", "format": "date"},
+                "date_of_birth": {"type": "string", "format": "date", "nullable": True},
+                "address": {"type": "string", "nullable": True},
+                "emergency_contact": {"type": "string", "nullable": True},
                 "status": {
                     "type": "string",
                     "enum": ["active", "inactive", "suspended"],
                 },
-                "date_of_birth": {"type": "string", "format": "date", "nullable": True},
             },
         },
         "MemberPatch": {
             "type": "object",
             "minProperties": 1,
             "properties": {
-                "first_name": {"type": "string"},
-                "last_name": {"type": "string"},
+                "name": {"type": "string"},
                 "email": {"type": "string", "format": "email"},
                 "phone": {"type": "string"},
+                "joining_date": {"type": "string", "format": "date"},
+                "date_of_birth": {"type": "string", "format": "date", "nullable": True},
+                "address": {"type": "string", "nullable": True},
+                "emergency_contact": {"type": "string", "nullable": True},
                 "status": {
                     "type": "string",
                     "enum": ["active", "inactive", "suspended"],
                 },
-                "date_of_birth": {"type": "string", "format": "date", "nullable": True},
             },
         },
         "TrainerCreate": {
             "type": "object",
-            "required": ["email", "phone", "max_members"],
+            "required": ["email", "phone"],
             "properties": {
                 "name": {"type": "string"},
                 "first_name": {"type": "string"},
@@ -398,8 +409,10 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
                 "email": {"type": "string", "format": "email"},
                 "phone": {"type": "string"},
                 "specialization": {"type": "string"},
-                "status": {"type": "string", "enum": ["ACTIVE", "INACTIVE"]},
-                "max_members": ID,
+                "status": {
+                    "type": "string", "enum": ["ACTIVE", "INACTIVE", "ON_LEAVE"]
+                },
+                "max_members": {"allOf": [ID], "nullable": True},
             },
         },
         "TrainerPatch": {
@@ -410,8 +423,10 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
                 "email": {"type": "string", "format": "email"},
                 "phone": {"type": "string"},
                 "specialization": {"type": "string"},
-                "status": {"type": "string", "enum": ["ACTIVE", "INACTIVE"]},
-                "max_members": ID,
+                "status": {
+                    "type": "string", "enum": ["ACTIVE", "INACTIVE", "ON_LEAVE"]
+                },
+                "max_members": {"allOf": [ID], "nullable": True},
             },
         },
         "TrainerAssignmentCreate": {
@@ -466,11 +481,11 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
         },
         "MembershipPlanCreate": {
             "type": "object",
-            "required": ["name", "price", "visit_limit", "duration_days"],
+            "required": ["name", "price", "duration_days"],
             "properties": {
                 "name": {"type": "string"},
-                "price": {"type": "string"},
-                "visit_limit": ID,
+                "price": {"type": "number", "minimum": 0},
+                "visit_limit": {"allOf": [ID], "nullable": True},
                 "duration_days": ID,
                 "is_active": {"type": "boolean"},
             },
@@ -480,8 +495,8 @@ def build_spec(app: Flask | None = None) -> dict[str, Any]:
             "minProperties": 1,
             "properties": {
                 "name": {"type": "string"},
-                "price": {"type": "string"},
-                "visit_limit": ID,
+                "price": {"type": "number", "minimum": 0},
+                "visit_limit": {"allOf": [ID], "nullable": True},
                 "duration_days": ID,
                 "is_active": {"type": "boolean"},
             },

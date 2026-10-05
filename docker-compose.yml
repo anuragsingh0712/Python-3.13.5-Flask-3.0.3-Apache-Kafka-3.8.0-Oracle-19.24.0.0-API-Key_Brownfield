@@ -1,9 +1,17 @@
 services:
   api:
     build: .
-    env_file: .env
     environment:
       APP_ENV: production
+      # Deliberately illustrative local credentials: override these for any deployment.
+      API_KEY: '{"replace-admin-key":["ADMIN"],"replace-staff-key":["STAFF"],"replace-trainer-key":["TRAINER"]}'
+      ORACLE_HOST: oracle
+      ORACLE_PORT: 1521
+      ORACLE_SERVICE_NAME: FREEPDB1
+      ORACLE_USERNAME: gym
+      ORACLE_PASSWORD: replace-me
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CLIENT_ID: gym-api
     ports: ["8000:8000"]
     command: ["sh", "-c", "python scripts/init_schema.py && exec ./start.sh"]
     depends_on:
@@ -12,9 +20,9 @@ services:
   oracle:
     image: gvenzl/oracle-free:23-slim
     environment:
-      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-replace-me}
-      APP_USER: ${ORACLE_USERNAME:-gym}
-      APP_USER_PASSWORD: ${ORACLE_PASSWORD:-replace-me}
+      ORACLE_PASSWORD: replace-me
+      APP_USER: gym
+      APP_USER_PASSWORD: replace-me
     ports: ["1521:1521"]
     healthcheck:
       test: ["CMD-SHELL", "healthcheck.sh"]
