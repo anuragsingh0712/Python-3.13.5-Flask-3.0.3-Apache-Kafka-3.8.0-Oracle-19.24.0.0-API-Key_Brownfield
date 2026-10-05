@@ -1,4 +1,5 @@
 """Members resource: DTOs, service logic, and the members Flask blueprint."""
+
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -7,7 +8,14 @@ from typing import Any, Literal
 from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core import DomainError, cursor_params, encode_cursor, parse_model, roles_required, success
+from app.core import (
+    DomainError,
+    cursor_params,
+    encode_cursor,
+    parse_model,
+    roles_required,
+    success,
+)
 from app.repository import EventPublisher, Repository
 
 members_bp = Blueprint("members", __name__)
@@ -40,8 +48,14 @@ class _MemberInput(BaseModel):
     @classmethod
     def normalize_phone(cls, value: str) -> str:
         # Preserve a leading + while making equivalent formatted phone numbers unique.
-        normalized = "".join(character for character in value if character.isdigit() or character == "+")
-        if normalized.count("+") > 1 or "+" in normalized[1:] or len(normalized.lstrip("+")) < 3:
+        normalized = "".join(
+            character for character in value if character.isdigit() or character == "+"
+        )
+        if (
+            normalized.count("+") > 1
+            or "+" in normalized[1:]
+            or len(normalized.lstrip("+")) < 3
+        ):
             raise ValueError("phone must be valid")
         return normalized
 
@@ -100,7 +114,9 @@ class MemberService:
     def _dto(row: dict[str, Any]) -> dict[str, Any]:
         return MemberDTO.model_validate(row).model_dump(mode="json")
 
-    def _assert_unique(self, values: dict[str, Any], ignore_id: int | None = None) -> None:
+    def _assert_unique(
+        self, values: dict[str, Any], ignore_id: int | None = None
+    ) -> None:
         """Delegate uniqueness checks to the repository's locking-aware implementation."""
         assert_unique = getattr(self.repository, "assert_unique", None)
         if not callable(assert_unique):
@@ -127,7 +143,9 @@ class MemberService:
     def update(self, member_id: int, payload: MemberPatchDTO) -> dict[str, Any]:
         values = payload.model_dump(exclude_unset=True, mode="python")
         if not values:
-            raise DomainError("validation_error", "At least one member field must be supplied.", 422)
+            raise DomainError(
+                "validation_error", "At least one member field must be supplied.", 422
+            )
         # Explicit null for date_of_birth is a supported way to clear it. Other nullable
         # fields are blocked by Pydantic's type definitions.
         values["updated_at"] = datetime.now(timezone.utc)
@@ -139,21 +157,37 @@ class MemberService:
         self.publisher.publish_after_commit("gym.member.updated.v1", result)
         return result
 
-    def list(self, *, cursor: int | None, limit: int, status: str | None, search: str | None,
-             sort: str, direction: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def list(
+        self,
+        *,
+        cursor: int | None,
+        limit: int,
+        status: str | None,
+        search: str | None,
+        sort: str,
+        direction: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         rows = self.repository.list(self.TABLE, status=status)
         if search:
             needle = search.casefold()
-            rows = [row for row in rows if needle in " ".join(
-                str(row.get(field, "")) for field in ("first_name", "last_name", "email", "phone")
-            ).casefold()]
+            rows = [
+                row
+                for row in rows
+                if needle
+                in " ".join(
+                    str(row.get(field, ""))
+                    for field in ("first_name", "last_name", "email", "phone")
+                ).casefold()
+            ]
         descending = direction == "desc"
         # The id-only allow-list keeps opaque ID cursors stable under concurrent writes.
         rows.sort(key=lambda row: row[sort], reverse=descending)
         if cursor is not None:
-            rows = [row for row in rows if row["id"] < cursor] if descending else [
-                row for row in rows if row["id"] > cursor
-            ]
+            rows = (
+                [row for row in rows if row["id"] < cursor]
+                if descending
+                else [row for row in rows if row["id"] > cursor]
+            )
         page = rows[:limit]
         meta: dict[str, Any] = {"limit": limit}
         if len(rows) > limit and page:
@@ -161,7 +195,9 @@ class MemberService:
         return [self._dto(row) for row in page], meta
 
 
-def configure_members(repository: Repository, publisher: EventPublisher) -> MemberService:
+def configure_members(
+    repository: Repository, publisher: EventPublisher
+) -> MemberService:
     """Attach this module's service to the blueprint before the app registers it."""
     service = MemberService(repository, publisher)
     members_bp.members_service = service  # type: ignore[attr-defined]
@@ -181,7 +217,9 @@ def _list_arguments() -> tuple[int | None, int, str | None, str | None, str, str
     allowed = {"cursor", "limit", "status", "search", "sort", "order"}
     unknown = set(request.args) - allowed
     if unknown:
-        raise DomainError("validation_error", "Unsupported member query parameter.", 422)
+        raise DomainError(
+            "validation_error", "Unsupported member query parameter.", 422
+        )
     cursor, limit = cursor_params()
     status = request.args.get("status")
     if status is not None and status not in _MEMBER_STATUSES:
@@ -199,7 +237,14 @@ def _list_arguments() -> tuple[int | None, int, str | None, str | None, str, str
 @members_bp.get("/members")
 def list_members():
     cursor, limit, status, search, sort, direction = _list_arguments()
-    data, meta = _service().list(cursor=cursor, limit=limit, status=status, search=search, sort=sort, direction=direction)
+    data, meta = _service().list(
+        cursor=cursor,
+        limit=limit,
+        status=status,
+        search=search,
+        sort=sort,
+        direction=direction,
+    )
     return success(data, meta=meta)
 
 

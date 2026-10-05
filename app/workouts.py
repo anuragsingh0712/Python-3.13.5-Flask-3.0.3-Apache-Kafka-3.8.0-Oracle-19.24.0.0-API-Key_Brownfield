@@ -1,4 +1,5 @@
 """Workout-plan and exercise resource service and Flask blueprint."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -8,7 +9,15 @@ from typing import Any
 from flask import Blueprint, Response, current_app, g, request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core import DomainError, ForbiddenError, cursor_params, encode_cursor, parse_model, roles_required, success
+from app.core import (
+    DomainError,
+    ForbiddenError,
+    cursor_params,
+    encode_cursor,
+    parse_model,
+    roles_required,
+    success,
+)
 from app.repository import EventPublisher, NullEventPublisher, Repository
 
 workouts_bp = Blueprint("workouts", __name__, url_prefix="/api/v1")
@@ -53,7 +62,9 @@ class WorkoutExerciseCreate(BaseModel):
 class WorkoutService:
     """Transactional workout-plan operations over the shared repository contract."""
 
-    def __init__(self, repository: Repository, publisher: EventPublisher | None = None) -> None:
+    def __init__(
+        self, repository: Repository, publisher: EventPublisher | None = None
+    ) -> None:
         self.repository = repository
         self.publisher = publisher or NullEventPublisher()
 
@@ -67,13 +78,23 @@ class WorkoutService:
     def get_plan(self, plan_id: int, *, for_update: bool = False) -> dict[str, Any]:
         return self.repository.get("workout_plans", plan_id, for_update=for_update)
 
-    def list_plans(self, member_id: int | None, trainer_id: int | None, cursor: int | None, limit: int) -> tuple[list[dict[str, Any]], str | None]:
-        rows = self.repository.list("workout_plans", member_id=member_id, trainer_id=trainer_id)
+    def list_plans(
+        self,
+        member_id: int | None,
+        trainer_id: int | None,
+        cursor: int | None,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        rows = self.repository.list(
+            "workout_plans", member_id=member_id, trainer_id=trainer_id
+        )
         rows.sort(key=lambda row: row["id"])
         if cursor is not None:
             rows = [row for row in rows if row["id"] > cursor]
         page = rows[:limit]
-        next_cursor = encode_cursor(page[-1]["id"]) if len(rows) > limit and page else None
+        next_cursor = (
+            encode_cursor(page[-1]["id"]) if len(rows) > limit and page else None
+        )
         return page, next_cursor
 
     def create_plan(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -81,7 +102,9 @@ class WorkoutService:
             self._require_reference("members", values["member_id"])
             self._require_reference("trainers", values["trainer_id"])
             now = self._now()
-            plan = self.repository.create("workout_plans", {**values, "created_at": now, "updated_at": now})
+            plan = self.repository.create(
+                "workout_plans", {**values, "created_at": now, "updated_at": now}
+            )
         self.publisher.publish_after_commit("gym.workout_plan.created.v1", plan)
         return plan
 
@@ -92,28 +115,36 @@ class WorkoutService:
                 self._require_reference("members", values["member_id"])
             if "trainer_id" in values:
                 self._require_reference("trainers", values["trainer_id"])
-            return self.repository.update("workout_plans", plan_id, {**values, "updated_at": self._now()})
+            return self.repository.update(
+                "workout_plans", plan_id, {**values, "updated_at": self._now()}
+            )
 
     def delete_plan(self, plan_id: int) -> None:
         with self.repository.transaction():
             self.get_plan(plan_id, for_update=True)
             # Delete dependants explicitly so the operation is valid with both the
             # in-memory repository and schemas which do not use ON DELETE CASCADE.
-            for exercise in self.repository.list("workout_exercises", workout_plan_id=plan_id):
+            for exercise in self.repository.list(
+                "workout_exercises", workout_plan_id=plan_id
+            ):
                 self.repository.delete("workout_exercises", exercise["id"])
             self.repository.delete("workout_plans", plan_id)
 
     def create_exercise(self, plan_id: int, values: dict[str, Any]) -> dict[str, Any]:
         with self.repository.transaction():
             self.get_plan(plan_id, for_update=True)
-            exercise = self.repository.create("workout_exercises", {"workout_plan_id": plan_id, **values})
+            exercise = self.repository.create(
+                "workout_exercises", {"workout_plan_id": plan_id, **values}
+            )
         self.publisher.publish_after_commit("gym.workout_exercise.created.v1", exercise)
         return exercise
 
     def delete_exercise(self, plan_id: int, exercise_id: int) -> None:
         with self.repository.transaction():
             self.get_plan(plan_id, for_update=True)
-            exercise = self.repository.get("workout_exercises", exercise_id, for_update=True)
+            exercise = self.repository.get(
+                "workout_exercises", exercise_id, for_update=True
+            )
             # An existing exercise under another plan must not be removable via a
             # guessed nested URL.
             if exercise.get("workout_plan_id") != plan_id:
@@ -121,7 +152,9 @@ class WorkoutService:
             self.repository.delete("workout_exercises", exercise_id)
 
 
-def init_workouts(app: Any, repository: Repository, publisher: EventPublisher | None = None) -> WorkoutService:
+def init_workouts(
+    app: Any, repository: Repository, publisher: EventPublisher | None = None
+) -> WorkoutService:
     """Install this independently testable resource's service on an application."""
     service = WorkoutService(repository, publisher)
     app.extensions["workout_service"] = service
@@ -148,7 +181,9 @@ def _positive_query_id(name: str) -> int | None:
     return identifier
 
 
-def _authorize_plan_mutation(plan: dict[str, Any] | None = None, requested_trainer_id: int | None = None) -> None:
+def _authorize_plan_mutation(
+    plan: dict[str, Any] | None = None, requested_trainer_id: int | None = None
+) -> None:
     roles = getattr(g, "roles", frozenset())
     if roles.intersection({"ADMIN", "STAFF"}):
         return
@@ -171,7 +206,9 @@ def _authorize_plan_mutation(plan: dict[str, Any] | None = None, requested_train
 @roles_required("ADMIN", "STAFF", "TRAINER")
 def list_workout_plans() -> Response:
     cursor, limit = cursor_params()
-    plans, next_cursor = _service().list_plans(_positive_query_id("member_id"), _positive_query_id("trainer_id"), cursor, limit)
+    plans, next_cursor = _service().list_plans(
+        _positive_query_id("member_id"), _positive_query_id("trainer_id"), cursor, limit
+    )
     meta: dict[str, Any] = {"limit": limit}
     if next_cursor is not None:
         meta["next_cursor"] = next_cursor
@@ -195,8 +232,12 @@ def update_workout_plan(plan_id: int) -> Response:
     _authorize_plan_mutation(plan)
     # A trainer cannot transfer the plan to a different trainer after passing the
     # ownership check on its original assignment.
-    if "TRAINER" in getattr(g, "roles", frozenset()) and not getattr(g, "roles", frozenset()).intersection({"ADMIN", "STAFF"}):
-        _authorize_plan_mutation(requested_trainer_id=payload.get("trainer_id", plan["trainer_id"]))
+    if "TRAINER" in getattr(g, "roles", frozenset()) and not getattr(
+        g, "roles", frozenset()
+    ).intersection({"ADMIN", "STAFF"}):
+        _authorize_plan_mutation(
+            requested_trainer_id=payload.get("trainer_id", plan["trainer_id"])
+        )
     return success(service.update_plan(plan_id, payload))
 
 

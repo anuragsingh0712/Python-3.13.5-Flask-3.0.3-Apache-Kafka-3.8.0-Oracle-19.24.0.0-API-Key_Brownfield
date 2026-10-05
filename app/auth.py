@@ -1,8 +1,8 @@
 """Constant-time API-key authentication middleware."""
+
 from __future__ import annotations
 
 import secrets
-from typing import Any
 
 from flask import Flask, g, request
 

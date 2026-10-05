@@ -2,7 +2,10 @@ services:
   api:
     build: .
     env_file: .env
+    environment:
+      APP_ENV: production
     ports: ["8000:8000"]
+    command: ["sh", "-c", "python scripts/init_schema.py && exec ./start.sh"]
     depends_on:
       oracle: {condition: service_healthy}
       kafka: {condition: service_started}

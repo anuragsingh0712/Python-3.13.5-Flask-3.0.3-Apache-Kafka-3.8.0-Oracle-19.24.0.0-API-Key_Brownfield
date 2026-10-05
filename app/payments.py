@@ -5,6 +5,7 @@ application can inject those through ``bind_payments`` (or its Flask extensions)
 which keeps the payment write transaction usable with both Oracle and the in-memory
 repository used by tests.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -14,7 +15,15 @@ from typing import Any, Literal, Mapping
 from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core import DomainError, NotFoundError, cursor_params, encode_cursor, parse_model, roles_required, success
+from app.core import (
+    DomainError,
+    NotFoundError,
+    cursor_params,
+    encode_cursor,
+    parse_model,
+    roles_required,
+    success,
+)
 from app.repository import EventPublisher, NullEventPublisher, Repository
 
 payments_bp = Blueprint("payments", __name__, url_prefix="/api/v1")
@@ -25,6 +34,7 @@ PAYMENT_STATUSES = frozenset({"PENDING", "COMPLETED", "FAILED", "REFUNDED"})
 
 class PaymentCreateDTO(BaseModel):
     """The amount is the original captured amount, never a negative adjustment."""
+
     model_config = ConfigDict(extra="forbid")
 
     member_id: int = Field(gt=0)
@@ -59,7 +69,9 @@ class RefundCreateDTO(BaseModel):
 
 
 class PaymentService:
-    def __init__(self, repository: Repository, publisher: EventPublisher | None = None) -> None:
+    def __init__(
+        self, repository: Repository, publisher: EventPublisher | None = None
+    ) -> None:
         self.repository = repository
         self.publisher = publisher or NullEventPublisher()
 
@@ -70,7 +82,11 @@ class PaymentService:
         if payload.membership_id is not None:
             membership = self.repository.get("memberships", payload.membership_id)
             if membership.get("member_id") != payload.member_id:
-                raise DomainError("validation_error", "membership_id does not belong to member_id.", 422)
+                raise DomainError(
+                    "validation_error",
+                    "membership_id does not belong to member_id.",
+                    422,
+                )
 
         values = {
             "member_id": payload.member_id,
@@ -87,12 +103,16 @@ class PaymentService:
         self.publisher.publish_after_commit("gym.payment.created.v1", payment)
         return payment
 
-    def list(self, cursor: int | None, limit: int, filters: Mapping[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+    def list(
+        self, cursor: int | None, limit: int, filters: Mapping[str, Any]
+    ) -> tuple[list[dict[str, Any]], str | None]:
         rows = self.repository.list("payments", **dict(filters))
         rows.sort(key=lambda row: int(row["id"]))
         rows = [row for row in rows if cursor is None or int(row["id"]) > cursor]
         page = rows[:limit]
-        next_cursor = encode_cursor(page[-1]["id"]) if len(rows) > limit and page else None
+        next_cursor = (
+            encode_cursor(page[-1]["id"]) if len(rows) > limit and page else None
+        )
         return page, next_cursor
 
     def refund(self, payment_id: int, payload: RefundCreateDTO) -> dict[str, Any]:
@@ -102,23 +122,39 @@ class PaymentService:
             payment = self.repository.get("payments", payment_id, for_update=True)
             status = str(payment.get("status", "")).upper()
             if status != "COMPLETED":
-                raise DomainError("invalid_state", "Only completed payments may be refunded.", 409)
+                raise DomainError(
+                    "invalid_state", "Only completed payments may be refunded.", 409
+                )
             original = _decimal(payment.get("amount"), "amount")
             refunded = _decimal(payment.get("refunded_amount", 0), "refunded_amount")
             if refunded + payload.amount > original:
-                raise DomainError("refund_exceeds_payment", "Refund amount exceeds the remaining payment balance.", 422)
+                raise DomainError(
+                    "refund_exceeds_payment",
+                    "Refund amount exceeds the remaining payment balance.",
+                    422,
+                )
             total = refunded + payload.amount
             # The persisted payment status has no partial-refund state.  A partial
             # refund is represented solely by refunded_amount; only a full refund
             # transitions the payment to REFUNDED.
             state = "REFUNDED" if total == original else "COMPLETED"
-            updated = self.repository.update("payments", payment_id, {
-                "refunded_amount": total,
-                "status": state,
-            })
-        self.publisher.publish_after_commit("gym.payment.refunded.v1", {
-            "payment_id": payment_id, "amount": payload.amount, "refunded_amount": updated["refunded_amount"], "status": updated["status"],
-        })
+            updated = self.repository.update(
+                "payments",
+                payment_id,
+                {
+                    "refunded_amount": total,
+                    "status": state,
+                },
+            )
+        self.publisher.publish_after_commit(
+            "gym.payment.refunded.v1",
+            {
+                "payment_id": payment_id,
+                "amount": payload.amount,
+                "refunded_amount": updated["refunded_amount"],
+                "status": updated["status"],
+            },
+        )
         return updated
 
 
@@ -126,10 +162,14 @@ def _decimal(value: Any, field: str) -> Decimal:
     try:
         return Decimal(str(value))
     except Exception as error:
-        raise DomainError("invalid_payment", f"Stored {field} is invalid.", 409) from error
+        raise DomainError(
+            "invalid_payment", f"Stored {field} is invalid.", 409
+        ) from error
 
 
-def bind_payments(repository: Repository, publisher: EventPublisher | None = None) -> None:
+def bind_payments(
+    repository: Repository, publisher: EventPublisher | None = None
+) -> None:
     """Optional lightweight injection point for apps that do not use extensions."""
     payments_bp.repository = repository  # type: ignore[attr-defined]
     payments_bp.publisher = publisher or NullEventPublisher()  # type: ignore[attr-defined]
@@ -137,10 +177,21 @@ def bind_payments(repository: Repository, publisher: EventPublisher | None = Non
 
 
 def _dependencies() -> tuple[Repository, EventPublisher]:
-    repository = current_app.extensions.get("repository") or current_app.config.get("REPOSITORY") or getattr(payments_bp, "repository", None)
-    publisher = current_app.extensions.get("event_publisher") or current_app.config.get("EVENT_PUBLISHER") or getattr(payments_bp, "publisher", None) or NullEventPublisher()
+    repository = (
+        current_app.extensions.get("repository")
+        or current_app.config.get("REPOSITORY")
+        or getattr(payments_bp, "repository", None)
+    )
+    publisher = (
+        current_app.extensions.get("event_publisher")
+        or current_app.config.get("EVENT_PUBLISHER")
+        or getattr(payments_bp, "publisher", None)
+        or NullEventPublisher()
+    )
     if repository is None:
-        raise RuntimeError("A Repository must be configured before registering payments routes.")
+        raise RuntimeError(
+            "A Repository must be configured before registering payments routes."
+        )
     return repository, publisher
 
 
@@ -154,7 +205,9 @@ def _payment_filters() -> dict[str, Any]:
                 if value <= 0:
                     raise ValueError
             except ValueError:
-                raise DomainError("validation_error", f"{name} must be a positive integer.", 422) from None
+                raise DomainError(
+                    "validation_error", f"{name} must be a positive integer.", 422
+                ) from None
             filters[name] = value
     if request.args.get("status") is not None:
         status = request.args["status"].strip().upper()
@@ -168,7 +221,9 @@ def _payment_filters() -> dict[str, Any]:
 def list_payments():
     cursor, limit = cursor_params()
     repository, publisher = _dependencies()
-    rows, next_cursor = PaymentService(repository, publisher).list(cursor, limit, _payment_filters())
+    rows, next_cursor = PaymentService(repository, publisher).list(
+        cursor, limit, _payment_filters()
+    )
     return success(rows, meta={"next_cursor": next_cursor})
 
 
@@ -176,7 +231,9 @@ def list_payments():
 @roles_required("ADMIN", "STAFF")
 def create_payment():
     repository, publisher = _dependencies()
-    payment = PaymentService(repository, publisher).create(parse_model(PaymentCreateDTO))
+    payment = PaymentService(repository, publisher).create(
+        parse_model(PaymentCreateDTO)
+    )
     return success(payment, status=201)
 
 
@@ -184,7 +241,9 @@ def create_payment():
 @roles_required("ADMIN", "STAFF")
 def refund_payment(payment_id: int):
     repository, publisher = _dependencies()
-    payment = PaymentService(repository, publisher).refund(payment_id, parse_model(RefundCreateDTO))
+    payment = PaymentService(repository, publisher).refund(
+        payment_id, parse_model(RefundCreateDTO)
+    )
     return success(payment)
 
 
@@ -211,10 +270,15 @@ def _report_dates() -> tuple[date | None, date | None]:
         try:
             return date.fromisoformat(raw)
         except ValueError:
-            raise DomainError("validation_error", f"{name} must be an ISO-8601 date.", 422) from None
+            raise DomainError(
+                "validation_error", f"{name} must be an ISO-8601 date.", 422
+            ) from None
+
     start, end = parse("start_date"), parse("end_date")
     if start and end and start > end:
-        raise DomainError("validation_error", "start_date cannot be after end_date.", 422)
+        raise DomainError(
+            "validation_error", "start_date cannot be after end_date.", 422
+        )
     return start, end
 
 
@@ -250,25 +314,57 @@ class ReportService:
         delegate = getattr(self.repository, "aggregate_report", None)
         if callable(delegate):
             result = delegate(name, start_date=start, end_date=end)
-            return {"report": name, "start_date": start, "end_date": end, "summary": result}
+            return {
+                "report": name,
+                "start_date": start,
+                "end_date": end,
+                "summary": result,
+            }
         rows = self.repository.list(table)
         selected = []
         for row in rows:
             row_date = _row_date(row, date_field)
-            if (start and (row_date is None or row_date < start)) or (end and (row_date is None or row_date > end)):
+            if (start and (row_date is None or row_date < start)) or (
+                end and (row_date is None or row_date > end)
+            ):
                 continue
             selected.append(row)
         summary: dict[str, Any] = {"count": len(selected)}
         if name in {"revenue", "payment"}:
-            gross = sum((_decimal(row.get("amount", 0), "amount") for row in selected), Decimal("0"))
-            refunded = sum((_decimal(row.get("refunded_amount", 0), "refunded_amount") for row in selected), Decimal("0"))
-            summary.update({"gross_amount": gross, "refunded_amount": refunded, "net_amount": gross - refunded})
+            gross = sum(
+                (_decimal(row.get("amount", 0), "amount") for row in selected),
+                Decimal("0"),
+            )
+            refunded = sum(
+                (
+                    _decimal(row.get("refunded_amount", 0), "refunded_amount")
+                    for row in selected
+                ),
+                Decimal("0"),
+            )
+            summary.update(
+                {
+                    "gross_amount": gross,
+                    "refunded_amount": refunded,
+                    "net_amount": gross - refunded,
+                }
+            )
         elif name == "attendance":
-            summary["present_count"] = sum(1 for row in selected if str(row.get("status", "")).upper() in {"PRESENT", "CHECKED_IN"})
-        return {"report": name, "start_date": start, "end_date": end, "summary": summary}
+            summary["present_count"] = sum(
+                1
+                for row in selected
+                if str(row.get("status", "")).upper() in {"PRESENT", "CHECKED_IN"}
+            )
+        return {
+            "report": name,
+            "start_date": start,
+            "end_date": end,
+            "summary": summary,
+        }
 
 
 @reports_bp.get("/reports/<report_name>")
+@roles_required("ADMIN", "STAFF", "TRAINER")
 def get_report(report_name: str):
     repository, _ = _dependencies()
     start, end = _report_dates()

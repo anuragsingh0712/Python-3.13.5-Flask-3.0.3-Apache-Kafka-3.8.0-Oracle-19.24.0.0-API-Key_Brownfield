@@ -1,4 +1,5 @@
 """Production Oracle repository factory (driver import remains lazy for test environments)."""
+
 from __future__ import annotations
 
 from typing import Any
