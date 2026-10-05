@@ -23,6 +23,14 @@
 - [ ] Attendance tests were not present in the workspace and could not be run in this unit.
 - [x] Trainers resource: added `app/trainers.py` with injected repository/publisher service, trainer CRUD collection routes, transactional trainer assignment lifecycle, validation, RBAC, and post-commit assignment event publishing.
 
+## Resume fix design
+- Canonical Oracle/application names are the migration names: plans `is_active`; memberships `start_date`, `end_date`, `price_paid`, `remaining_visits`; attendance `check_in_at`, `check_out_at`; enrollments `class_id`; payments `method`, `reference_id`, `created_at`. Payment status remains `PENDING|COMPLETED|FAILED|REFUNDED`; partial refunds retain `COMPLETED` with `refunded_amount`.
+- Production wiring defaults to `OracleRepository` when `APP_ENV=production` (or `USE_ORACLE=true`); explicit injected repositories remain test seams. Oracle CRUD uses static table/column allow-lists, bind variables, transactions with commit/rollback, constraint translation, and `SELECT ... FOR UPDATE`.
+- Kafka publisher buffers transaction events and flushes only after commit. Production default is a `KafkaEventPublisher`; tests can inject `CapturingPublisher`/`NullEventPublisher`.
+- API-key configuration accepts only nonempty mappings to ADMIN/STAFF/TRAINER role lists; authentication uses `secrets.compare_digest` against every configured key to avoid direct lookup timing leaks.
+- Parallel repair groups: membership/attendance/classes/payment-report schema alignment; foundation persistence/auth/infra; test suite/OpenAPI/Docker documentation.
+- [ ] Resume verifier remediation
+
 ## Unit updates
 - Members resource implemented in `app/members.py`; no focused tests added (test runner was not available in this unit environment).
 - Classes resource implemented in `app/classes.py`: class DTOs/service/blueprint, authenticated reads, ADMIN/STAFF class and enrollment writes, serialized capacity/membership enrollment validation, enrollment cancellation state updates, and post-commit class/enrollment events.
