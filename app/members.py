@@ -23,18 +23,21 @@ members_bp = Blueprint("members", __name__)
 _MEMBER_STATUSES = frozenset({"active", "inactive", "suspended"})
 # Cursor semantics are deliberately tied to the monotonically increasing id.
 _MEMBER_SORT_FIELDS = frozenset({"id"})
-_MEMBER_FILTER_FIELDS = frozenset({"status"})
 
 
-class _MemberInput(BaseModel):
+class _MemberFields(BaseModel):
+    """Canonical member fields shared by create and partial-update DTOs."""
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    first_name: str = Field(min_length=1, max_length=100)
-    last_name: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
     email: str = Field(min_length=3, max_length=320)
     phone: str = Field(min_length=3, max_length=40)
-    status: Literal["active", "inactive", "suspended"] = "active"
+    joining_date: date
     date_of_birth: date | None = None
+    address: str | None = Field(default=None, min_length=1, max_length=1000)
+    emergency_contact: str | None = Field(default=None, min_length=1, max_length=300)
+    status: Literal["active", "inactive", "suspended"] = "active"
 
     @field_validator("email")
     @classmethod
@@ -60,7 +63,7 @@ class _MemberInput(BaseModel):
         return normalized
 
 
-class MemberCreateDTO(_MemberInput):
+class MemberCreateDTO(_MemberFields):
     """Payload accepted when a member is created."""
 
 
@@ -69,22 +72,24 @@ class MemberPatchDTO(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    first_name: str | None = Field(default=None, min_length=1, max_length=100)
-    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     email: str | None = Field(default=None, min_length=3, max_length=320)
     phone: str | None = Field(default=None, min_length=3, max_length=40)
-    status: Literal["active", "inactive", "suspended"] | None = None
+    joining_date: date | None = None
     date_of_birth: date | None = None
+    address: str | None = Field(default=None, min_length=1, max_length=1000)
+    emergency_contact: str | None = Field(default=None, min_length=1, max_length=300)
+    status: Literal["active", "inactive", "suspended"] | None = None
 
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: str | None) -> str | None:
-        return _MemberInput.normalize_email(value) if value is not None else value
+        return _MemberFields.normalize_email(value) if value is not None else value
 
     @field_validator("phone")
     @classmethod
     def normalize_phone(cls, value: str | None) -> str | None:
-        return _MemberInput.normalize_phone(value) if value is not None else value
+        return _MemberFields.normalize_phone(value) if value is not None else value
 
 
 class MemberDTO(BaseModel):
@@ -93,12 +98,14 @@ class MemberDTO(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: int
-    first_name: str
-    last_name: str
+    name: str
     email: str
     phone: str
-    status: Literal["active", "inactive", "suspended"]
+    joining_date: date
     date_of_birth: date | None = None
+    address: str | None = None
+    emergency_contact: str | None = None
+    status: Literal["active", "inactive", "suspended"]
     created_at: datetime
     updated_at: datetime
 
@@ -132,8 +139,6 @@ class MemberService:
         values = payload.model_dump(mode="python")
         now = datetime.now(timezone.utc)
         values.update(
-            name=f"{values['first_name']} {values['last_name']}",
-            joining_date=now.date(),
             status=values["status"].upper(),
             created_at=now,
             updated_at=now,
@@ -154,17 +159,12 @@ class MemberService:
             raise DomainError(
                 "validation_error", "At least one member field must be supplied.", 422
             )
-        # Explicit null for date_of_birth is a supported way to clear it. Other nullable
-        # fields are blocked by Pydantic's type definitions.
+        # Explicit null for nullable profile fields is supported as a clear operation.
         values["updated_at"] = datetime.now(timezone.utc)
         if "status" in values:
             values["status"] = values["status"].upper()
         with self.repository.transaction():
-            current = self.repository.get(self.TABLE, member_id, for_update=True)
-            if "first_name" in values or "last_name" in values:
-                values["name"] = (
-                    f"{values.get('first_name', current['first_name'])} {values.get('last_name', current['last_name'])}"
-                )
+            self.repository.get(self.TABLE, member_id, for_update=True)
             self._assert_unique(values, ignore_id=member_id)
             row = self.repository.update(self.TABLE, member_id, values)
         result = self._dto(row)
@@ -191,8 +191,7 @@ class MemberService:
                 for row in rows
                 if needle
                 in " ".join(
-                    str(row.get(field, ""))
-                    for field in ("first_name", "last_name", "email", "phone")
+                    str(row.get(field, "")) for field in ("name", "email", "phone")
                 ).casefold()
             ]
         descending = direction == "desc"

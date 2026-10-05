@@ -50,9 +50,11 @@ def test_create_and_bounded_refunds():
     ]
 
 
-def test_revenue_report_is_authenticated_and_aggregated():
+def test_payment_statistics_report_is_authenticated_and_aggregated():
     http, _, _ = client()
-    assert http.get("/api/v1/reports/revenue").status_code == 401
-    response = http.get("/api/v1/reports/revenue", headers={"X-API-Key": "key"})
+    assert http.get("/api/v1/reports/payment-statistics").status_code == 401
+    response = http.get(
+        "/api/v1/reports/payment-statistics", headers={"X-API-Key": "key"}
+    )
     assert response.status_code == 200
     assert response.get_json()["data"]["summary"]["net_amount"] == "0"

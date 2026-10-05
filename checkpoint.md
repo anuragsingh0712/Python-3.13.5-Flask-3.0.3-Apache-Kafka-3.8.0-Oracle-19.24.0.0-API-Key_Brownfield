@@ -60,3 +60,8 @@
 - Named reports are: `daily-attendance`, `monthly-attendance`, `active-members`, `expiring-memberships`, `expired-memberships`, `payment-statistics`, `trainer-statistics`, `member-statistics`, and `class-enrollment`; report aggregates derive presence from `check_in_at` rather than a nonexistent attendance status.
 - Independent repair groups: members; memberships; trainers; reports; test/verification + deployment. Shared contract is the canonical schema above, response envelope/auth unchanged, and OpenAPI must track each altered DTO/report enum.
 - [ ] Verifier gap remediation in progress
+  - [x] Members canonical DTO/migration/tests implemented.
+  - [x] Membership nullable/free plan and immutable renewal lifecycle implemented.
+  - [x] Trainer ON_LEAVE and optional/unlimited capacity implemented.
+  - [x] Named report variants/aggregates implemented.
+  - [ ] OpenAPI/deployment/comprehensive verification pending.

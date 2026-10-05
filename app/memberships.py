@@ -31,19 +31,23 @@ MembershipStatus = Literal["ACTIVE", "CANCELLED", "SUSPENDED", "EXPIRED"]
 class PlanCreateDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
-    price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    visit_limit: int = Field(gt=0, le=100000)
+    price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    # None is an unlimited plan; a positive value is a finite visit balance.
+    visit_limit: int | None = Field(default=None, gt=0, le=100000)
     duration_days: int = Field(gt=0, le=3650)
     is_active: bool = True
 
 
 class PlanPatchDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    price: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    # Defaults make fields optional, while their non-optional annotations reject
+    # explicit null for terms which cannot be null. visit_limit deliberately
+    # remains nullable so an explicit PATCH null changes a plan to unlimited.
+    name: str = Field(default=None, min_length=1, max_length=120)
+    price: Decimal = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     visit_limit: int | None = Field(default=None, gt=0, le=100000)
-    duration_days: int | None = Field(default=None, gt=0, le=3650)
-    is_active: bool | None = None
+    duration_days: int = Field(default=None, gt=0, le=3650)
+    is_active: bool = Field(default=None)
 
 
 class MembershipCreateDTO(BaseModel):
@@ -114,7 +118,9 @@ class MembershipService:
         return event
 
     def patch_plan(self, plan_id: int, dto: PlanPatchDTO) -> dict[str, Any]:
-        values = dto.model_dump(exclude_none=True)
+        # exclude_unset, rather than exclude_none, preserves an explicit
+        # visit_limit: null as the unlimited-plan instruction.
+        values = dto.model_dump(exclude_unset=True)
         if not values:
             raise DomainError(
                 "validation_error", "At least one field must be supplied.", 422
@@ -185,7 +191,10 @@ class MembershipService:
     def _membership_values(
         member_id: int, plan: dict[str, Any], start_date: date
     ) -> dict[str, Any]:
-        visits = int(plan["visit_limit"])
+        # A null plan limit is intentionally retained as null in the snapshot:
+        # it represents unlimited visits, not zero visits.
+        limit = plan.get("visit_limit")
+        visits = None if limit is None else int(limit)
         return {
             "member_id": member_id,
             "plan_id": plan["id"],
@@ -205,11 +214,15 @@ class MembershipService:
         with self.repo.transaction():
             membership = self.repo.get(MEMBERSHIP_TABLE, membership_id, for_update=True)
             if action == "renew":
+                if membership["status"] != ACTIVE:
+                    raise ConflictError("Only an active membership can be renewed.")
                 member = self.repo.get(
                     MEMBER_TABLE, membership["member_id"], for_update=True
                 )
                 if not _active_member(member):
                     raise DomainError("inactive_member", "Member must be active.", 422)
+                # The selected row is the lifecycle being replaced, so it is not
+                # a conflict. Any *other* active lifecycle still is.
                 conflicts = [
                     m
                     for m in self.repo.list(
@@ -224,9 +237,11 @@ class MembershipService:
                 plan = _plan_terms(
                     self.repo.get(PLAN_TABLE, membership["plan_id"], for_update=True)
                 )
-                event = self.repo.update(
+                # Membership terms are snapshots. Never overwrite the old row's
+                # plan, price, dates, or remaining visits during renewal.
+                self.repo.update(MEMBERSHIP_TABLE, membership_id, {"status": "EXPIRED"})
+                event = self.repo.create(
                     MEMBERSHIP_TABLE,
-                    membership_id,
                     self._membership_values(
                         membership["member_id"], plan, start_date or date.today()
                     ),

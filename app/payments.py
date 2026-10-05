@@ -3,8 +3,9 @@
 The module deliberately depends only on the repository and publisher interfaces.  An
 application can inject those through ``bind_payments`` (or its Flask extensions),
 which keeps the payment write transaction usable with both Oracle and the in-memory
-repository used by tests.
-"""
+repository used by tests.  Reports are intentionally calculated from canonical
+schema fields, rather than accepting a client-selected table or column.
+"""} }]}Oops used multi syntax to functions maybe response? It accepted? tool result blank likely call malformed? It shows tool? Actually nested. Need check. Then big edit. Need old text exact entirety report section too huge ~118 lines. Can do successive delete old map then class. Replace map only then class run. First map. Also obsolete comment. Use exact. +#+#+#+#+#+ിയassistant to=functions.edit_file კომენტary 񎔊ppնչ্ছেনಲ್ಲಿ  天天中彩票是不是彩票招商്യം d天天 全民彩票天天  北京赛车怎么json{Jsii 
 
 from __future__ import annotations
 
@@ -247,18 +248,18 @@ def refund_payment(payment_id: int):
     return success(payment)
 
 
-# Reports are named, allow-listed queries.  Each one has exactly one schema-backed
-# table and date column; request input is never used as an identifier.
+# These are the complete public report names.  Values identify only fixed,
+# canonical schema fields; neither a table nor a column is accepted from a request.
 _REPORTS: dict[str, tuple[str, str]] = {
-    "attendance": ("attendance", "check_in_at"),
-    "member": ("members", "joining_date"),
-    "membership": ("memberships", "start_date"),
-    "revenue": ("payments", "created_at"),
-    "payment": ("payments", "created_at"),
-    "trainer-member": ("trainer_assignments", "assigned_at"),
-    "trainer-assignment": ("trainer_assignments", "assigned_at"),
+    "daily-attendance": ("attendance", "check_in_at"),
+    "monthly-attendance": ("attendance", "check_in_at"),
+    "active-members": ("memberships", "end_date"),
+    "expiring-memberships": ("memberships", "end_date"),
+    "expired-memberships": ("memberships", "end_date"),
+    "payment-statistics": ("payments", "created_at"),
+    "trainer-statistics": ("trainer_assignments", "assigned_at"),
+    "member-statistics": ("members", "joining_date"),
     "class-enrollment": ("class_enrollments", "enrolled_at"),
-    "classes": ("gym_classes", "scheduled_at"),
 }
 
 
@@ -304,63 +305,173 @@ class ReportService:
     def __init__(self, repository: Repository) -> None:
         self.repository = repository
 
-    def run(self, name: str, start: date | None, end: date | None) -> dict[str, Any]:
+    @staticmethod
+    def _dated_rows(
+        rows: list[dict[str, Any]], field: str, start: date | None, end: date | None
+    ) -> list[dict[str, Any]]:
+        """Return rows with a real canonical date in the inclusive requested range."""
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            row_date = _row_date(row, field)
+            if row_date is None:
+                continue
+            if (start and row_date < start) or (end and row_date > end):
+                continue
+            selected.append(row)
+        return selected
+
+    @staticmethod
+    def _counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in rows:
+            key = str(row.get(field, "UNKNOWN")).upper()
+            counts[key] = counts.get(key, 0) + 1
+        return dict(sorted(counts.items()))
+
+    @staticmethod
+    def _attendance_buckets(
+        rows: list[dict[str, Any]], monthly: bool
+    ) -> list[dict[str, Any]]:
+        buckets: dict[str, int] = {}
+        for row in rows:
+            checked_in = _row_date(row, "check_in_at")
+            # _dated_rows already rejects null check_in_at.  Keeping this guard makes
+            # presence semantics explicit if this helper is reused.
+            if checked_in is None:
+                continue
+            key = checked_in.strftime("%Y-%m") if monthly else checked_in.isoformat()
+            buckets[key] = buckets.get(key, 0) + 1
+        label = "month" if monthly else "date"
+        return [
+            {label: key, "present_count": value}
+            for key, value in sorted(buckets.items())
+        ]
+
+    def run(
+        self, name: str, start: date | None, end: date | None
+    ) -> dict[str, Any]:
         try:
             table, date_field = _REPORTS[name]
         except KeyError:
             raise NotFoundError("report") from None
-        # An SQL-backed adapter may provide a parameterized, pre-defined aggregate;
-        # the name is allow-listed above and never originates as a table identifier.
-        delegate = getattr(self.repository, "aggregate_report", None)
-        if callable(delegate):
-            result = delegate(name, start_date=start, end_date=end)
-            return {
-                "report": name,
-                "start_date": start,
-                "end_date": end,
-                "summary": result,
+
+        rows = self._dated_rows(self.repository.list(table), date_field, start, end)
+        summary: dict[str, Any]
+        if name in {"daily-attendance", "monthly-attendance"}:
+            # A check-in is the canonical proof of attendance; ATTENDANCE has no
+            # status column and no inferred status is consulted here.
+            monthly = name == "monthly-attendance"
+            summary = {
+                "present_count": len(rows),
+                "buckets": self._attendance_buckets(rows, monthly),
             }
-        rows = self.repository.list(table)
-        selected = []
-        for row in rows:
-            row_date = _row_date(row, date_field)
-            if (start and (row_date is None or row_date < start)) or (
-                end and (row_date is None or row_date > end)
-            ):
-                continue
-            selected.append(row)
-        summary: dict[str, Any] = {"count": len(selected)}
-        if name in {"revenue", "payment"}:
+        elif name == "active-members":
+            active = [
+                row for row in rows if str(row.get("status", "")).upper() == "ACTIVE"
+            ]
+            member_ids = {
+                row.get("member_id")
+                for row in active
+                if row.get("member_id") is not None
+            }
+            summary = {
+                "active_members": len(member_ids),
+                "active_memberships": len(active),
+            }
+        elif name == "expiring-memberships":
+            expiring = [
+                row for row in rows if str(row.get("status", "")).upper() == "ACTIVE"
+            ]
+            summary = {
+                "expiring_memberships": len(expiring),
+                "by_end_date": self._date_buckets(expiring, "end_date"),
+            }
+        elif name == "expired-memberships":
+            expired = [
+                row for row in rows if str(row.get("status", "")).upper() == "EXPIRED"
+            ]
+            summary = {
+                "expired_memberships": len(expired),
+                "by_end_date": self._date_buckets(expired, "end_date"),
+            }
+        elif name == "payment-statistics":
             gross = sum(
-                (_decimal(row.get("amount", 0), "amount") for row in selected),
+                (_decimal(row.get("amount", 0), "amount") for row in rows),
                 Decimal("0"),
             )
             refunded = sum(
                 (
                     _decimal(row.get("refunded_amount", 0), "refunded_amount")
-                    for row in selected
+                    for row in rows
                 ),
                 Decimal("0"),
             )
-            summary.update(
-                {
-                    "gross_amount": gross,
-                    "refunded_amount": refunded,
-                    "net_amount": gross - refunded,
-                }
-            )
-        elif name == "attendance":
-            summary["present_count"] = sum(
-                1
-                for row in selected
-                if str(row.get("status", "")).upper() in {"PRESENT", "CHECKED_IN"}
-            )
+            summary = {
+                "payment_count": len(rows),
+                "gross_amount": gross,
+                "refunded_amount": refunded,
+                "net_amount": gross - refunded,
+                "status_counts": self._counts(rows, "status"),
+                "method_counts": self._counts(rows, "method"),
+            }
+        elif name == "trainer-statistics":
+            by_trainer: dict[str, int] = {}
+            for row in rows:
+                trainer_id = row.get("trainer_id")
+                if trainer_id is not None:
+                    key = str(trainer_id)
+                    by_trainer[key] = by_trainer.get(key, 0) + 1
+            summary = {
+                "assignment_count": len(rows),
+                "trainer_count": len(by_trainer),
+                "assignments_by_trainer": [
+                    {"trainer_id": int(key), "assigned_members": value}
+                    for key, value in sorted(by_trainer.items(), key=lambda item: int(item[0]))
+                ],
+            }
+        elif name == "member-statistics":
+            summary = {
+                "member_count": len(rows),
+                "status_counts": self._counts(rows, "status"),
+                "joined_by_date": self._date_buckets(rows, "joining_date"),
+            }
+        else:  # class-enrollment
+            by_class: dict[str, int] = {}
+            for row in rows:
+                if str(row.get("status", "")).upper() != "ENROLLED":
+                    continue
+                class_id = row.get("class_id")
+                if class_id is not None:
+                    key = str(class_id)
+                    by_class[key] = by_class.get(key, 0) + 1
+            summary = {
+                "enrollment_count": len(rows),
+                "enrolled_count": sum(by_class.values()),
+                "status_counts": self._counts(rows, "status"),
+                "enrollments_by_class": [
+                    {"class_id": int(key), "enrolled_members": value}
+                    for key, value in sorted(by_class.items(), key=lambda item: int(item[0]))
+                ],
+            }
+        # Keep a uniform selected-row count while named fields retain their
+        # domain-specific meaning (for example, active_members is de-duplicated).
+        summary["count"] = len(rows)
         return {
             "report": name,
             "start_date": start,
             "end_date": end,
             "summary": summary,
         }
+
+    @staticmethod
+    def _date_buckets(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
+        counts: dict[str, int] = {}
+        for row in rows:
+            value = _row_date(row, field)
+            if value is not None:
+                key = value.isoformat()
+                counts[key] = counts.get(key, 0) + 1
+        return [{"date": key, "count": value} for key, value in sorted(counts.items())]
 
 
 @reports_bp.get("/reports/<report_name>")

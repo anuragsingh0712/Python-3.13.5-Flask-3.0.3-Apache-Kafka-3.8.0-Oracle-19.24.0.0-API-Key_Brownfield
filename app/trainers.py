@@ -24,7 +24,9 @@ from app.core import (
 )
 from app.repository import EventPublisher, NullEventPublisher, Repository
 
-TRAINER_STATUSES = frozenset({"ACTIVE", "INACTIVE"})
+TRAINER_STATUSES = frozenset({"ACTIVE", "INACTIVE", "ON_LEAVE"})
+
+# A null capacity deliberately represents an unlimited trainer roster.
 ASSIGNMENT_CREATED_TOPIC = "gym.trainer_assignment.created.v1"
 
 
@@ -46,7 +48,7 @@ class TrainerCreateDTO(_DTO):
     phone: str = Field(min_length=3, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
     status: str = "ACTIVE"
-    max_members: int = Field(gt=0, le=100000)
+    max_members: int | None = Field(default=None, gt=0, le=100000)
 
     @field_validator("email")
     @classmethod
@@ -182,7 +184,9 @@ class TrainerService:
             if unique:
                 self._assert_unique(unique, ignore_id=trainer_id)
             # A capacity reduction cannot strand existing assignments.
-            if "max_members" in values:
+            # ``None`` means unlimited.  Only a finite capacity can be reduced
+            # below (and therefore validated against) the existing roster.
+            if "max_members" in values and values["max_members"] is not None:
                 assigned = len(
                     self.repo.list("trainer_assignments", trainer_id=trainer_id)
                 )
@@ -204,10 +208,12 @@ class TrainerService:
                 "trainer_assignments", trainer_id=trainer["id"], member_id=member["id"]
             ):
                 raise ConflictError("This trainer/member assignment already exists.")
-            if (
-                len(self.repo.list("trainer_assignments", trainer_id=trainer["id"]))
-                >= trainer["max_members"]
-            ):
+            # A missing legacy field and an explicit null both mean unlimited;
+            # never index capacity unconditionally.
+            capacity = trainer.get("max_members")
+            if capacity is not None and len(
+                self.repo.list("trainer_assignments", trainer_id=trainer["id"])
+            ) >= int(capacity):
                 raise ConflictError("Trainer has reached member capacity.")
             assignment = self.repo.create(
                 "trainer_assignments",
