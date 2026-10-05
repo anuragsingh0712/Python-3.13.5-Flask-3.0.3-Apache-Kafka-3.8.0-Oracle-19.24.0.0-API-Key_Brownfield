@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,6 +20,8 @@ from app.repository import EventPublisher, NullEventPublisher, Repository
 payments_bp = Blueprint("payments", __name__, url_prefix="/api/v1")
 reports_bp = Blueprint("reports", __name__, url_prefix="/api/v1")
 
+PAYMENT_STATUSES = frozenset({"PENDING", "COMPLETED", "FAILED", "REFUNDED"})
+
 
 class PaymentCreateDTO(BaseModel):
     """The amount is the original captured amount, never a negative adjustment."""
@@ -28,14 +30,25 @@ class PaymentCreateDTO(BaseModel):
     member_id: int = Field(gt=0)
     membership_id: int | None = Field(default=None, gt=0)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    payment_method: str = Field(min_length=1, max_length=40)
-    reference: str | None = Field(default=None, max_length=120)
-    paid_at: datetime | None = None
+    method: Literal["CASH", "CARD", "UPI", "BANK_TRANSFER", "OTHER"]
+    reference_id: str = Field(min_length=1, max_length=200)
+    created_at: datetime | None = None
+    status: Literal["PENDING", "COMPLETED", "FAILED", "REFUNDED"] = "COMPLETED"
 
-    @field_validator("payment_method")
+    @field_validator("method", mode="before")
     @classmethod
-    def clean_method(cls, value: str) -> str:
+    def clean_method(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            return value
         return value.strip().upper()
+
+    @field_validator("reference_id")
+    @classmethod
+    def clean_reference_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reference_id must not be blank")
+        return value
 
 
 class RefundCreateDTO(BaseModel):
@@ -64,10 +77,10 @@ class PaymentService:
             "membership_id": payload.membership_id,
             "amount": payload.amount,
             "refunded_amount": Decimal("0.00"),
-            "payment_method": payload.payment_method,
-            "reference": payload.reference,
-            "paid_at": payload.paid_at or datetime.now(timezone.utc),
-            "status": "COMPLETED",
+            "method": payload.method,
+            "reference_id": payload.reference_id,
+            "created_at": payload.created_at or datetime.now(timezone.utc),
+            "status": payload.status,
         }
         with self.repository.transaction():
             payment = self.repository.create("payments", values)
@@ -88,20 +101,20 @@ class PaymentService:
         with self.repository.transaction():
             payment = self.repository.get("payments", payment_id, for_update=True)
             status = str(payment.get("status", "")).upper()
-            if status not in {"COMPLETED", "PARTIALLY_REFUNDED"}:
+            if status != "COMPLETED":
                 raise DomainError("invalid_state", "Only completed payments may be refunded.", 409)
             original = _decimal(payment.get("amount"), "amount")
             refunded = _decimal(payment.get("refunded_amount", 0), "refunded_amount")
             if refunded + payload.amount > original:
                 raise DomainError("refund_exceeds_payment", "Refund amount exceeds the remaining payment balance.", 422)
             total = refunded + payload.amount
-            state = "REFUNDED" if total == original else "PARTIALLY_REFUNDED"
+            # The persisted payment status has no partial-refund state.  A partial
+            # refund is represented solely by refunded_amount; only a full refund
+            # transitions the payment to REFUNDED.
+            state = "REFUNDED" if total == original else "COMPLETED"
             updated = self.repository.update("payments", payment_id, {
                 "refunded_amount": total,
                 "status": state,
-                "last_refund_amount": payload.amount,
-                "last_refund_reason": payload.reason,
-                "refunded_at": datetime.now(timezone.utc),
             })
         self.publisher.publish_after_commit("gym.payment.refunded.v1", {
             "payment_id": payment_id, "amount": payload.amount, "refunded_amount": updated["refunded_amount"], "status": updated["status"],
@@ -144,7 +157,10 @@ def _payment_filters() -> dict[str, Any]:
                 raise DomainError("validation_error", f"{name} must be a positive integer.", 422) from None
             filters[name] = value
     if request.args.get("status") is not None:
-        filters["status"] = request.args["status"].strip().upper()
+        status = request.args["status"].strip().upper()
+        if status not in PAYMENT_STATUSES:
+            raise DomainError("validation_error", "status is invalid.", 422)
+        filters["status"] = status
     return filters
 
 
@@ -172,16 +188,19 @@ def refund_payment(payment_id: int):
     return success(payment)
 
 
-_REPORT_TABLES = {
-    "attendance": "attendance",
-    "member": "members",
-    "membership": "memberships",
-    "revenue": "payments",
-    "payment": "payments",
-    "trainer-member": "trainer_members",
-    "class-enrollment": "class_enrollments",
+# Reports are named, allow-listed queries.  Each one has exactly one schema-backed
+# table and date column; request input is never used as an identifier.
+_REPORTS: dict[str, tuple[str, str]] = {
+    "attendance": ("attendance", "check_in_at"),
+    "member": ("members", "joining_date"),
+    "membership": ("memberships", "start_date"),
+    "revenue": ("payments", "created_at"),
+    "payment": ("payments", "created_at"),
+    "trainer-member": ("trainer_assignments", "assigned_at"),
+    "trainer-assignment": ("trainer_assignments", "assigned_at"),
+    "class-enrollment": ("class_enrollments", "enrolled_at"),
+    "classes": ("gym_classes", "scheduled_at"),
 }
-_DATE_FIELDS = ("occurred_at", "attended_at", "paid_at", "created_at", "start_date", "enrolled_at", "date")
 
 
 def _report_dates() -> tuple[date | None, date | None]:
@@ -199,18 +218,21 @@ def _report_dates() -> tuple[date | None, date | None]:
     return start, end
 
 
-def _row_date(row: Mapping[str, Any]) -> date | None:
-    for field in _DATE_FIELDS:
-        value = row.get(field)
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
+def _row_date(row: Mapping[str, Any], field: str) -> date | None:
+    """Read only the allow-listed date column for the selected report."""
+    value = row.get(field)
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        except ValueError:
             try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+                return date.fromisoformat(value)
             except ValueError:
-                continue
+                return None
     return None
 
 
@@ -219,16 +241,23 @@ class ReportService:
         self.repository = repository
 
     def run(self, name: str, start: date | None, end: date | None) -> dict[str, Any]:
-        if name not in _REPORT_TABLES:
-            raise NotFoundError("report")
+        try:
+            table, date_field = _REPORTS[name]
+        except KeyError:
+            raise NotFoundError("report") from None
         # An SQL-backed adapter may provide a parameterized, pre-defined aggregate;
         # the name is allow-listed above and never originates as a table identifier.
         delegate = getattr(self.repository, "aggregate_report", None)
         if callable(delegate):
             result = delegate(name, start_date=start, end_date=end)
             return {"report": name, "start_date": start, "end_date": end, "summary": result}
-        rows = self.repository.list(_REPORT_TABLES[name])
-        selected = [row for row in rows if (not start or (_row_date(row) is not None and _row_date(row) >= start)) and (not end or (_row_date(row) is not None and _row_date(row) <= end))]
+        rows = self.repository.list(table)
+        selected = []
+        for row in rows:
+            row_date = _row_date(row, date_field)
+            if (start and (row_date is None or row_date < start)) or (end and (row_date is None or row_date > end)):
+                continue
+            selected.append(row)
         summary: dict[str, Any] = {"count": len(selected)}
         if name in {"revenue", "payment"}:
             gross = sum((_decimal(row.get("amount", 0), "amount") for row in selected), Decimal("0"))

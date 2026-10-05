@@ -35,3 +35,15 @@
 - Members resource implemented in `app/members.py`; no focused tests added (test runner was not available in this unit environment).
 - Classes resource implemented in `app/classes.py`: class DTOs/service/blueprint, authenticated reads, ADMIN/STAFF class and enrollment writes, serialized capacity/membership enrollment validation, enrollment cancellation state updates, and post-commit class/enrollment events.
 - Membership resource group implemented in `app/memberships.py`: plan and membership DTOs/services/blueprint, transactional state changes, snapshot terms, pagination, RBAC, and post-commit membership events. No shared registration or schema files changed.
+
+## Unit status — foundation remediation
+- [x] Replaced the Oracle placeholder with bound-SQL pooled `OracleRepository`, static table/column maps, identity `RETURNING`, CRUD/filtering, row locks, transaction commit/rollback, and domain error translation.
+- [x] Added production Oracle/Kafka factories, transaction-aware deferred publisher, API-key constant-time middleware, hardened settings validation, idempotent schema runner, and unprivileged Docker user.
+- [ ] Focused command execution was unavailable in this environment; files were reviewed for syntax only.
+- [x] Membership/attendance/classes schema consistency repair: canonical plan, membership, attendance, and enrollment names are now used by DTOs, persistence, outputs, and events; classes allow only SCHEDULED/CANCELLED. Enrollment locks class and qualifying membership in its transaction, rejects exhausted/expired memberships, and consumes finite visits. Added `app/test_membership_attendance_classes.py` focused coverage. Test/lint execution was unavailable because this environment exposes no shell runner.
+- Payments/reports repair: `app/payments.py` now persists canonical payment columns (`method`, `reference_id`, `created_at`), retains `COMPLETED` for partial refunds and uses `REFUNDED` only at the full amount, and uses schema-specific allow-listed report date columns/tables. Added `app/test_payments_reports.py` regression coverage. Test execution was not available through this unit's tool interface.
+
+## Unit status — documentation/test deliverables
+- [x] Replaced runtime-route-derived OpenAPI with an explicit OpenAPI 3.0.3 contract in `app/openapi.py`, covering public documentation routes and all API resources, real path/query parameters, JSON request schemas, response/error declarations, and `X-API-Key` security for business operations.
+- [x] Added `app/test_documentation.py` Flask test-client coverage for public docs, key/role rejection, members, trainers, workouts, and post-commit event publication using `InMemoryRepository`/`CapturingPublisher` injection seams.
+- [ ] Focused pytest/ruff not run: this unit environment exposed filesystem tools only and no command-execution tool.

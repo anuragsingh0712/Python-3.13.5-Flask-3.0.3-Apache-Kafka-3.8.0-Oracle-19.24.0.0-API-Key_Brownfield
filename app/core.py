@@ -54,10 +54,15 @@ class Settings:
             keys = json.loads(raw)
         except json.JSONDecodeError as error:
             raise RuntimeError("API_KEY must be a JSON role mapping.") from error
-        if not isinstance(keys, dict) or any(not isinstance(v, list) for v in keys.values()):
-            raise RuntimeError("API_KEY must be a JSON mapping of keys to role lists.")
+        allowed_roles = {"ADMIN", "STAFF", "TRAINER"}
+        if (not isinstance(keys, dict) or any(
+            not isinstance(key, str) or not key.strip() or not isinstance(roles, list)
+            or any(not isinstance(role, str) or role.upper() not in allowed_roles for role in roles)
+            for key, roles in keys.items()
+        )):
+            raise RuntimeError("API_KEY must map nonempty keys to nonempty ADMIN, STAFF, or TRAINER role lists.")
         return cls(
-            api_keys={key: frozenset(str(role).upper() for role in roles) for key, roles in keys.items()},
+            api_keys={key: frozenset(role.upper() for role in roles) for key, roles in keys.items()},
             oracle_dsn=f"{os.getenv('ORACLE_HOST', 'oracle')}:{os.getenv('ORACLE_PORT', '1521')}/{os.getenv('ORACLE_SERVICE_NAME', 'FREEPDB1')}",
             oracle_username=os.getenv("ORACLE_USERNAME", "gym"), oracle_password=os.getenv("ORACLE_PASSWORD", ""),
             kafka_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"), kafka_client_id=os.getenv("KAFKA_CLIENT_ID", "gym-api"),
@@ -126,12 +131,6 @@ def configure_app(app: Flask, settings: Settings) -> None:
         g.correlation_id = request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or secrets.token_hex(12)
         if request.path in {"/health", "/docs", "/openapi.json"}:
             return
-        if request.path.startswith("/api/v1/"):
-            key = request.headers.get("X-API-Key", "")
-            roles = settings.api_keys.get(key)
-            if roles is None:
-                raise DomainError("unauthorized", "Authentication is required.", 401)
-            g.roles = roles
 
     @app.errorhandler(DomainError)
     def domain_error(error: DomainError) -> Response:
