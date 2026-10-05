@@ -109,7 +109,7 @@ class MembershipService:
         if not values:
             raise DomainError("validation_error", "At least one field must be supplied.", 422)
         with self.repo.transaction():
-            plan = self.repo.get(PLAN_TABLE, plan_id, for_update=True)
+            self.repo.get(PLAN_TABLE, plan_id, for_update=True)
             if "name" in values and any(p["id"] != plan_id and p.get("name", "").casefold() == values["name"].casefold() for p in self.repo.list(PLAN_TABLE)):
                 raise ConflictError("A membership plan with this name already exists.")
             event = self.repo.update(PLAN_TABLE, plan_id, values)
@@ -129,8 +129,10 @@ class MembershipService:
     def is_usable(membership: dict[str, Any], on_date: date | None = None) -> bool:
         today = on_date or date.today()
         starts, ends = membership.get("starts_on"), membership.get("ends_on")
-        if isinstance(starts, str): starts = date.fromisoformat(starts)
-        if isinstance(ends, str): ends = date.fromisoformat(ends)
+        if isinstance(starts, str):
+            starts = date.fromisoformat(starts)
+        if isinstance(ends, str):
+            ends = date.fromisoformat(ends)
         return (membership.get("status") == ACTIVE and starts <= today <= ends and int(membership.get("remaining_visits", 0)) > 0)
 
     def create_membership(self, dto: MembershipCreateDTO) -> dict[str, Any]:
@@ -226,7 +228,8 @@ def get_memberships():
     cursor, limit = cursor_params()
     try:
         member_id = int(request.args["member_id"]) if "member_id" in request.args else None
-        if member_id is not None and member_id < 1: raise ValueError
+        if member_id is not None and member_id < 1:
+            raise ValueError
     except ValueError:
         raise DomainError("validation_error", "member_id is invalid.", 422) from None
     rows, meta = _service().list_memberships(cursor, limit, member_id, request.args.get("status"))

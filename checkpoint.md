@@ -10,10 +10,11 @@
 
 ## Status
 - [x] STEP 1 design
-- [ ] Scaffold/config/schema/migration
-- [ ] Resource groups
+- [x] Scaffold/config/schema/migration
+- [x] Resource groups
   - [x] Members: `app/members.py` provides DTOs, service, cursor collection/read/write routes, uniqueness enforcement, and post-commit events.
-- [ ] Tests/lint/boot/report/Docker verification
+- [x] pytest (2 passed), ruff (clean), native Gunicorn boot and live HTTP report
+- [!] Docker image pull/build/run verification blocked: Docker daemon unavailable
 - [x] Payments/reports unit — added `app/payments.py` with injected repository-backed payment creation/listing, bounded transactional refunds, role/auth rules, post-commit events, and safe named reports; added focused `app/test_payments.py` coverage.
 - [x] Workouts resource — added `app/workouts.py` with plan/exercise schemas, transactional service, authenticated blueprint endpoints, trainer ownership checks, timestamps, and post-commit creation events.
 

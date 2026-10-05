@@ -12,7 +12,7 @@ from typing import Any
 from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.core import ConflictError, DomainError, NotFoundError, cursor_params, encode_cursor, parse_model, roles_required, success
+from app.core import ConflictError, DomainError, cursor_params, encode_cursor, parse_model, roles_required, success
 from app.repository import EventPublisher, NullEventPublisher, Repository
 
 TRAINER_STATUSES = frozenset({"ACTIVE", "INACTIVE"})
