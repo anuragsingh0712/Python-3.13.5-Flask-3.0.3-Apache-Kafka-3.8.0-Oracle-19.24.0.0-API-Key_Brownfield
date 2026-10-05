@@ -112,7 +112,9 @@ class MemberService:
 
     @staticmethod
     def _dto(row: dict[str, Any]) -> dict[str, Any]:
-        return MemberDTO.model_validate(row).model_dump(mode="json")
+        payload = dict(row)
+        payload["status"] = str(payload["status"]).lower()
+        return MemberDTO.model_validate(payload).model_dump(mode="json")
 
     def _assert_unique(
         self, values: dict[str, Any], ignore_id: int | None = None
@@ -129,7 +131,13 @@ class MemberService:
     def create(self, payload: MemberCreateDTO) -> dict[str, Any]:
         values = payload.model_dump(mode="python")
         now = datetime.now(timezone.utc)
-        values.update(created_at=now, updated_at=now)
+        values.update(
+            name=f"{values['first_name']} {values['last_name']}",
+            joining_date=now.date(),
+            status=values["status"].upper(),
+            created_at=now,
+            updated_at=now,
+        )
         with self.repository.transaction():
             self._assert_unique(values)
             row = self.repository.create(self.TABLE, values)
@@ -149,8 +157,14 @@ class MemberService:
         # Explicit null for date_of_birth is a supported way to clear it. Other nullable
         # fields are blocked by Pydantic's type definitions.
         values["updated_at"] = datetime.now(timezone.utc)
+        if "status" in values:
+            values["status"] = values["status"].upper()
         with self.repository.transaction():
-            self.repository.get(self.TABLE, member_id, for_update=True)
+            current = self.repository.get(self.TABLE, member_id, for_update=True)
+            if "first_name" in values or "last_name" in values:
+                values["name"] = (
+                    f"{values.get('first_name', current['first_name'])} {values.get('last_name', current['last_name'])}"
+                )
             self._assert_unique(values, ignore_id=member_id)
             row = self.repository.update(self.TABLE, member_id, values)
         result = self._dto(row)
@@ -167,7 +181,9 @@ class MemberService:
         sort: str,
         direction: str,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        rows = self.repository.list(self.TABLE, status=status)
+        rows = self.repository.list(
+            self.TABLE, status=status.upper() if status else None
+        )
         if search:
             needle = search.casefold()
             rows = [

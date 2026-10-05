@@ -33,7 +33,7 @@
   - [x] Real Oracle pool-backed CRUD/transactions/row-locking, deferred post-commit Kafka producer, constant-time API-key middleware, production factory wiring, idempotent migration runner, and non-root Docker image.
   - [x] Canonical schema names enforced in memberships, attendance, classes, payments, reports, and trainer assignments; removed legacy Oracle column aliases.
   - [x] Explicit OpenAPI operations include request bodies and path/query parameters; role/auth and resource/event tests expanded, including Oracle transaction/locking fake-driver coverage.
-  - [x] Validation: `python -m pytest -q` (13 passed); `python -m ruff check app scripts` (clean); native one-worker Gunicorn live workflow passed and produced `tests-artifacts/api_test_report.xlsx` + `changes_report.docx`.
+  - [x] Validation: `python -m pytest -q` (13 passed); `python -m ruff check app scripts` (clean); native one-worker Gunicorn live workflow passed and produced `tests-artifacts/api_test_report.xlsx` + `changes_report.docx`. A final native health boot probe also passed after the final schema-mapping alignment.
   - [!] Docker image pull/build/run verification attempted but blocked by unavailable Docker daemon (`Cannot connect to the Docker daemon at unix:///var/run/docker.sock`). Dockerfile and compose contract were still updated (non-root user, app port 8000, Oracle/Kafka pinned images, schema command).
 
 ## Unit updates
